@@ -1,0 +1,40 @@
+name: Publish
+on:
+  push:
+    branches: [ "main" ]  
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Publish
+    runs-on: docker-vm
+    container:
+      image: git.keen.land/pete/forgejo-alpine-builder:latest
+      credentials:
+        username: ${{ forgejo.repository_owner }}
+        password: ${{ secrets.FORGEJO_TOKEN }}
+    steps:
+      - name: Checkout Repo
+        uses: https://data.forgejo.org/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Package Tarball
+        run: |
+          tar -C public -czf public.tar.gz .
+          sha256sum public.tar.gz > public.tar.gz.sha256
+      - name: Publish
+        env:
+          FJ_PUSH_TOKEN: ${{ secrets.FJ_PUSH_TOKEN }}
+          PACKAGE_VERSION: build-${{ forgejo.run_number }}.${{ forgejo.run_attempt }}
+        run: |
+          package_base="${{ forgejo.server_url }}/api/packages/${{ forgejo.repository_owner }}/generic/${{ github.event.repository.name }}/${PACKAGE_VERSION}"
+          echo "Publishing to ${package_base}"
+          for file in public.tar.gz public.tar.gz.sha256; do
+            curl --fail-with-body \
+              --user "${{ forgejo.repository_owner }}:${FJ_PUSH_TOKEN}" \
+              --upload-file "${file}" \
+              "${package_base}/${file}"
+          done
+          printf '### Public\n\n[Download tarball](%s) · [SHA-256 checksum](%s)\n' \
+            "${package_base}/public.tar.gz" \
+            "${package_base}/public.tar.gz.sha256" >> "${FORGEJO_STEP_SUMMARY}"
