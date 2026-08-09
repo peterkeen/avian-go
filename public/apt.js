@@ -788,8 +788,9 @@
   collage.addEventListener('click', function (ev) {
     var hit = maskHitTest(ev.clientX, ev.clientY);
     if (!hit) return;
+    // Only set the hash - syncRouter does the go(2), so it can first record
+    // that we came from the collage and return here when the card closes.
     location.hash = '#sci=' + encodeURIComponent(hit.data.sci);
-    go(2);
   });
 
   // Debug hook - call __layout({ slugs, weights, n }) from devtools to
@@ -2135,21 +2136,35 @@
   window.__closeDetailModal = closeDetailModal;
 
 
-  // Initial load: if URL has a sci hash, jump to atlas, highlight, and
-  // open the modal.
-  if (readHash()) { go(2); highlightAtlas(readHash()); openDetailModal(readHash()); }
   // #about - brief explainer popup; reached via /about (302 -> /#about)
   // or the masthead eyebrow. aria-hidden drives the CSS fade/slide.
   function openAbout() { document.getElementById('about-modal').setAttribute('aria-hidden', 'false'); }
   function closeAbout() { document.getElementById('about-modal').setAttribute('aria-hidden', 'true'); }
+
+  // A detail card is always shown over the atlas, but you can open one from
+  // any view (tapping a collage bird, a stats row, a timeline square). Closing
+  // it should put you back where you started rather than stranding you on the
+  // atlas. Null means no card is open; it is captured on the transition into
+  // a card so re-entrant calls with a card already open don't overwrite it.
+  var viewBeforeDetail = null;
   function syncRouter() {
     window.__lastHashchange = Date.now();
     var sci = readHash();
     if (location.hash === '#about') openAbout(); else closeAbout();
-    if (sci) { go(2); highlightAtlas(sci); openDetailModal(sci); }
-    else { highlightAtlas(null); closeDetailModal(); }
+    if (sci) {
+      if (viewBeforeDetail === null) viewBeforeDetail = currentView;
+      go(2); highlightAtlas(sci); openDetailModal(sci);
+    } else {
+      var back = viewBeforeDetail;
+      viewBeforeDetail = null;
+      highlightAtlas(null); closeDetailModal();
+      if (back !== null) go(back);
+    }
   }
   if (location.hash === '#about') openAbout();
+  // Initial load with a #sci= hash: route through syncRouter so the card opens
+  // over the atlas and closing it falls back to the collage.
+  if (readHash()) syncRouter();
   window.addEventListener('hashchange', syncRouter);
 
   // Modal interactions: backdrop / close button -> clear the hash.
