@@ -1,0 +1,14 @@
+# Species the Birdex should know about that have no bundled illustration.
+#
+# One scientific name per line; '#' starts a comment. Add a line, then run
+#   python3 tools/build-birdex.py
+# and only the new names are fetched. Existing dex numbers never change; new
+# entries take the next free number.
+#
+# Entries here get art: false - they can't be silhouetted (no alpha mask), so
+# unregistered they show a generic glyph, and registered they fall back to
+# BirdNET-Go's image proxy. Drop a pair of PNGs into public/assets/illustrations
+# and regenerate dims.json/masks.json to promote one to full art.
+#
+# Example:
+# Sialia mexicana

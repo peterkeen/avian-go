@@ -56,7 +56,7 @@
   // Each view's title text. The shared static-head shows one of these
   // based on the current view; identical adjacent values mean the title
   // stays put with no fade (collage and stats both say Heard Recently).
-  var VIEW_TITLES = ['Heard Recently', 'Heard Recently', 'Avian Visitors'];
+  var VIEW_TITLES = ['Heard Recently', 'Heard Recently', 'Avian Visitors', 'The Birdex'];
   var staticHead = document.querySelector('.static-head');
   var staticTitle = document.getElementById('staticTitle');
   function setTitleForView(i) {
@@ -85,7 +85,7 @@
   var STATS_LEAD = SLIDE_MS - 200;    // stats - begin a touch sooner
   var currentView = 0;                // collage shows first (no go() needed)
   function go(i) {
-    i = Math.max(0, Math.min(2, i));
+    i = Math.max(0, Math.min(3, i));
     // Only a genuine view *switch* replays the entrance. go() also fires when
     // a card is expanded (it sets the #sci= hash, which routes through go(2))
     // while already on the atlas - that must not retrigger the load-in.
@@ -101,6 +101,10 @@
     if (i === 0) playCollageEntrance();
     else if (i === 1) playStatsEntrance(STATS_LEAD);
     else if (i === 2) playAtlasEntrance(SWITCH_LEAD);
+    // Just replay the cascade - the list is already built by the time you can
+    // switch to it, and rebuilding 331 rows plus repainting their silhouettes
+    // on every tab switch would be pure waste.
+    else if (i === 3) playBirdexEntrance(SWITCH_LEAD);
   }
   btns.forEach(function (b) { b.addEventListener('click', function () { go(+b.dataset.i); }); });
 
@@ -225,6 +229,8 @@
       // renderCollage defers its first pack until the silhouettes exist (see
       // the tablesReady gate); render now that they are here.
       try { renderCollageFromData(); } catch (e) { }
+      // The Birdex draws its unregistered entries from the same masks.
+      try { renderBirdex(); } catch (e) { }
     }).catch(function (e) {
       // Leave tablesReady false so renderCollage keeps waiting rather than
       // packing with no silhouettes. The empty-nest state still renders.
@@ -1277,30 +1283,17 @@
   }
 
   // ---- Atlas: field-guide card grid ----
-  // eBird species codes for placeholder birds. eBird's URL scheme is
-  // https://ebird.org/species/<code>/, where <code> is a stable 6-char
-  // taxonomy code. Hardcoded here for the local-California demo set;
-  // a real implementation can look these up via the eBird taxon API.
-  var EBIRD_CODES = {
-    'Calypte anna': 'annhum',
-    'Passer domesticus': 'houspa',
-    'Haemorhous mexicanus': 'houfin',
-    'Turdus migratorius': 'amerob',
-    'Zenaida macroura': 'moudov',
-    'Spinus psaltria': 'lesgol',
-    'Zonotrichia leucophrys': 'whcspa',
-    'Aphelocoma californica': 'cascj1',
-    'Mimus polyglottos': 'normoc',
-    'Sayornis nigricans': 'blkpho',
-    'Larus occidentalis': 'wegull',
-    'Corvus brachyrhynchos': 'amecro'
-  };
-
   function wikiUrl(sci) {
     return 'https://en.wikipedia.org/wiki/' + encodeURIComponent(sci.replace(/ /g, '_'));
   }
+  // eBird's URL scheme is https://ebird.org/species/<code>, where <code> is a
+  // stable 6-char taxonomy code. These used to live in a hand-written table of
+  // a dozen species; they now come from birdex.json (Wikidata P3444, ~99% of
+  // the roster), with two hand-set in tools/overrides.json where Wikidata
+  // disagreed with the codes this site originally shipped.
   function ebirdUrl(sci) {
-    var code = EBIRD_CODES[sci];
+    var rec = BIRDEX && BIRDEX.species ? BIRDEX.species[birdexSlugFor(sci)] : null;
+    var code = rec && rec.ebird;
     return code ? 'https://ebird.org/species/' + code : 'https://ebird.org/explore';
   }
 
@@ -1569,6 +1562,672 @@
     if (animate) playAtlasEntrance();
   }
 
+  // ============ Birdex ============
+  // A numbered field guide over the bundled illustration set. Every species
+  // with art holds a permanent number; the ones this station has actually
+  // heard are "registered" and show their plate, stats and blurb, while the
+  // rest stay silhouetted at ??? until they turn up.
+  //
+  // Reference data (Avibase id, IUCN category, family, common name, blurb) is
+  // baked into birdex.json by tools/build-birdex.py, so nothing on this path
+  // touches a third-party service at runtime. Avibase in particular is never
+  // fetched - it sits behind a Cloudflare challenge - we only deep-link it
+  // using the identifiers Wikidata publishes for it.
+  // Two files, split by load cost. birdex.json (~56KB) is the metadata that
+  // drives the list and every outbound link, so it loads eagerly.
+  // birdex-text.json (~390KB) is descriptions only, fetched the first time
+  // something actually needs to show prose.
+  //
+  // They carry a matching content stamp. If the two ever disagree - a stale
+  // cached half, a partial deploy - the text side is discarded rather than
+  // rendered against the wrong roster, and entries fall back to "no
+  // description" the same as if the file were missing entirely.
+  var BIRDEX = null, birdexPromise = null;
+  var BIRDEX_TEXT = null, birdexTextPromise = null;
+  var birdexSel = null, birdexQuery = '';
+
+  function loadBirdex() {
+    if (!birdexPromise) {
+      birdexPromise = fetch('./birdex.json?v=' + SKETCH_VERSION)
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function (j) { BIRDEX = j; return j; })
+        .catch(function (e) { birdexPromise = null; throw e; });
+    }
+    return birdexPromise;
+  }
+
+  function loadBirdexText() {
+    if (!birdexTextPromise) {
+      birdexTextPromise = loadBirdex().then(function () {
+        return fetch('./birdex-text.json?v=' + SKETCH_VERSION);
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (j) {
+        if (j.stamp && BIRDEX.stamp && j.stamp !== BIRDEX.stamp) {
+          if (window.console) {
+            console.warn('birdex: text/metadata stamp mismatch (' + j.stamp + ' vs ' +
+              BIRDEX.stamp + ') - ignoring descriptions until caches agree');
+          }
+          BIRDEX_TEXT = { blurbs: {} };
+        } else {
+          BIRDEX_TEXT = j;
+        }
+        return BIRDEX_TEXT;
+      }).catch(function (e) {
+        // Resolve rather than reject: a missing description file must not take
+        // an entry down with it. Null marks it as tried-and-unavailable so we
+        // don't refetch on every selection.
+        if (window.console) console.warn('birdex-text.json unavailable', e);
+        BIRDEX_TEXT = { blurbs: {} };
+        return BIRDEX_TEXT;
+      });
+    }
+    return birdexTextPromise;
+  }
+
+  function blurbFor(slug) {
+    return (BIRDEX_TEXT && BIRDEX_TEXT.blurbs && BIRDEX_TEXT.blurbs[slug]) || null;
+  }
+
+  // Trim to a character budget on a sentence boundary, keeping any paragraph
+  // break that falls before the cut.
+  function excerpt(text, maxChars) {
+    if (!text || text.length <= maxChars) return text || '';
+    var cut = text.lastIndexOf('. ', maxChars);
+    if (cut > 140) return text.slice(0, cut + 1);
+    return text.slice(0, maxChars).replace(/\s+\S*$/, '') + '…';
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // BirdNET-Go reports whatever taxonomy its model was trained on, which
+  // drifts from the names the art is filed under (Corthylio calendula vs
+  // regulus-calendula). The alias map is built alongside birdex.json; without
+  // it a species the station has genuinely heard would sit dark forever.
+  function birdexSlugFor(sci) {
+    var s = slugify(sci || '');
+    return (BIRDEX && BIRDEX.aliases && BIRDEX.aliases[s]) || s;
+  }
+
+  var IUCN_LABELS = {
+    LC: 'least concern', NT: 'near threatened', VU: 'vulnerable',
+    EN: 'endangered', CR: 'critically endangered', EW: 'extinct in the wild',
+    EX: 'extinct', DD: 'data deficient', NE: 'not evaluated',
+  };
+  function avibaseUrl(id) {
+    return 'https://avibase.bsc-eoc.org/species.jsp?avibaseid=' + encodeURIComponent(id);
+  }
+
+  // Paint a 1-bit mask straight into ImageData, without going through
+  // loadMask()'s decoded cell list. The collage only ever needs masks for
+  // species it's drawing (a few dozen); the Birdex lists all 333 at once, and
+  // caching a coordinate-pair array per species would cost tens of MB for
+  // thumbnails that are 36px wide.
+  function paintSilhouette(canvas, slug) {
+    var rec = MASKS[slug];
+    if (!rec) return false;
+    var w = rec.w, h = rec.h;
+    var bytes = atob(rec.bits);
+    var ctx = canvas.getContext('2d');
+    canvas.width = w; canvas.height = h;
+    var img = ctx.createImageData(w, h);
+    var px = img.data;
+    // Silhouettes are drawn in the ink colour so they follow the active theme
+    // the way every other mark on the page does.
+    var ink = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim();
+    var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ink);
+    var r = m ? parseInt(m[1], 16) : 26, g = m ? parseInt(m[2], 16) : 22, b = m ? parseInt(m[3], 16) : 18;
+    for (var i = 0, n = w * h; i < n; i++) {
+      if ((bytes.charCodeAt(i >> 3) >> (7 - (i & 7))) & 1) {
+        var o = i * 4;
+        px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
+  // The roster is fixed at build time, but the station can hear something the
+  // roster doesn't cover. Rather than drop it, those land after the numbered
+  // entries as "unlisted" - visible, honestly labelled, and countable
+  // separately so the completion figure stays true to the roster.
+  function birdexRows() {
+    var species = (BIRDEX && BIRDEX.species) || {};
+    var life = (DATA.lifelist && DATA.lifelist.species) || [];
+    var seen = {};
+    life.forEach(function (s) { seen[birdexSlugFor(s.sci)] = s; });
+
+    var rows = Object.keys(species).sort(function (a, b) {
+      return species[a].n - species[b].n;
+    }).map(function (slug) {
+      return { slug: slug, rec: species[slug], life: seen[slug] || null, unlisted: false };
+    });
+
+    life.forEach(function (s) {
+      var slug = birdexSlugFor(s.sci);
+      if (species[slug]) return;
+      rows.push({
+        slug: slug, unlisted: true, life: s,
+        rec: { sci: s.sci, com: s.com, art: !!DIMS[slug] },
+      });
+    });
+    return rows;
+  }
+
+  // Entries the user chose to look up. Kept deliberately separate from
+  // "registered": the tally counts birds the station actually heard, and
+  // revealing one is a decision to peek, not a detection. Per-device, like the
+  // other bird:* preferences.
+  var birdexRevealed = (function () {
+    try { return JSON.parse(readLS('bird:birdexRevealed', '[]')) || []; }
+    catch (e) { return []; }
+  })();
+  function isRevealed(slug) { return birdexRevealed.indexOf(slug) >= 0; }
+  function setRevealed(slug, on) {
+    var i = birdexRevealed.indexOf(slug);
+    if (on && i < 0) birdexRevealed.push(slug);
+    else if (!on && i >= 0) birdexRevealed.splice(i, 1);
+    writeLS('bird:birdexRevealed', JSON.stringify(birdexRevealed));
+  }
+
+  // Locked entries match on every field, same as registered ones - searching
+  // for a bird you know exists shouldn't fail just because it hasn't turned up
+  // yet. The list shows their names for the duration of the query (see
+  // renderBirdex); the plate stays behind the silhouette until it's unlocked.
+  function birdexMatches(row, q) {
+    if (!q) return true;
+    var rec = row.rec;
+    return (rec.com || '').toLowerCase().indexOf(q) >= 0
+      || (rec.sci || '').toLowerCase().indexOf(q) >= 0
+      || (rec.family || '').toLowerCase().indexOf(q) >= 0
+      || typeWords(rec.types).indexOf(q) >= 0
+      || String(rec.n || '').indexOf(q.replace(/^#/, '')) === 0;
+  }
+
+  // Searchable text for a bird's typing: both the vocabulary key and the label
+  // shown on the badge, since people will type what they can see ("terrestrial")
+  // as readily as the underlying term ("ground-dweller").
+  // Deliberately NOT consulted for still-locked entries - "raptor" narrowing the
+  // list to a set of silhouettes would give away what they are.
+  function typeWords(ty) {
+    if (!ty) return '';
+    var V = (BIRDEX && BIRDEX.vocab) || {};
+    var words = [];
+    var push = function (axis, key) {
+      if (!key) return;
+      words.push(key);
+      var d = (V[axis] || {})[key];
+      if (d && d.label) words.push(d.label);
+    };
+    push('guild', ty.guild);
+    (ty.traits || []).forEach(function (t) { push('trait', t); });
+    push('element', ty.element);
+    return words.join(' ').toLowerCase();
+  }
+
+  function renderBirdex(animate, lead) {
+    var listEl = document.getElementById('birdexList');
+    if (!listEl) return;
+    if (!BIRDEX) {
+      loadBirdex().then(function () { renderBirdex(animate, lead); }).catch(function (e) {
+        listEl.innerHTML = '<p class="birdex-empty">Birdex data unavailable.</p>';
+        if (window.console) console.warn('birdex.json failed to load', e);
+      });
+      return;
+    }
+
+    var rows = birdexRows();
+    var listed = rows.filter(function (r) { return !r.unlisted; });
+    var got = listed.filter(function (r) { return r.life; }).length;
+    var extra = rows.length - listed.length;
+
+    var seenEl = document.getElementById('birdexSeen');
+    var totalEl = document.getElementById('birdexTotal');
+    var meter = document.getElementById('birdexMeter');
+    var noteEl = document.getElementById('birdexNote');
+    if (seenEl) seenEl.textContent = got;
+    if (totalEl) totalEl.textContent = listed.length;
+    if (meter) meter.style.width = (listed.length ? (got / listed.length * 100) : 0).toFixed(1) + '%';
+    if (noteEl) {
+      noteEl.textContent = extra
+        ? extra + ' heard but unlisted - add to tools/roster-extra.txt'
+        : '';
+    }
+
+    var q = birdexQuery.trim().toLowerCase();
+    var visible = rows.filter(function (r) { return birdexMatches(r, q); });
+    if (!visible.length) {
+      listEl.innerHTML = '<p class="birdex-empty">Nothing matches that.</p>';
+      return;
+    }
+
+    listEl.innerHTML = visible.map(function (row) {
+      var rec = row.rec, caught = !!row.life;
+      var revealed = !caught && isRevealed(row.slug);
+      var shown = caught || revealed;
+      var num = row.unlisted ? '&mdash;' : ('#' + String(rec.n).padStart(3, '0'));
+      // While a query is active a locked row shows its name, so a search can
+      // actually find it - but only its name. The plate stays hidden behind
+      // the silhouette, and the name reverts to ??? when the query clears.
+      var name = (shown || q) ? esc(rec.com || rec.sci) : '???';
+      var thumb = shown
+        ? '<img loading="lazy" decoding="async" alt="" src="' +
+            esc(rec.art !== false ? illustrationSrc(rec.sci, 1) : proxyImageSrc(rec.sci)) + '"' +
+            (rec.art !== false ? ' onerror="this.onerror=null;this.src=\'' + esc(proxyImageSrc(rec.sci)) + '\'"' : '') + '>'
+        : '<canvas class="bx-sil" data-slug="' + esc(row.slug) + '"></canvas>';
+      return '<button type="button" class="birdex-row" data-slug="' + esc(row.slug) + '"'
+        + ' data-caught="' + caught + '"'
+        + (revealed ? ' data-revealed="true"' : '')
+        + (row.slug === birdexSel ? ' data-active="true"' : '')
+        + '><span class="bx-n">' + num + '</span>'
+        + '<span class="bx-thumb">' + thumb + '</span>'
+        + '<span class="bx-name">' + name + '</span>'
+        + (caught ? '<span class="bx-ct">' + fmtNK(+row.life.n || 0) + '</span>' : '')
+        + '</button>';
+    }).join('');
+
+    // Silhouettes need MASKS, which loads async alongside DIMS. If it isn't
+    // here yet, loadTables() re-renders us when it lands.
+    if (tablesReady) {
+      listEl.querySelectorAll('canvas.bx-sil').forEach(function (c) {
+        if (!paintSilhouette(c, c.dataset.slug)) c.classList.add('no-mask');
+      });
+    }
+
+    if (birdexSel) renderBirdexEntry(birdexSel);
+    else if (!document.getElementById('birdexEntry').dataset.ready) renderBirdexEntry(null);
+    if (animate) playBirdexEntrance(lead);
+  }
+
+  // Row entrance: a short top-to-bottom cascade, capped so 333 rows don't
+  // crawl. Same shape as playAtlasEntrance, keyed on index rather than
+  // offsetTop because the list is a single column.
+  var birdexEntranceT = null;
+  function playBirdexEntrance(lead) {
+    lead = lead || 0;
+    var listEl = document.getElementById('birdexList');
+    if (!listEl) return;
+    var rows = [].slice.call(listEl.querySelectorAll('.birdex-row'));
+    if (!rows.length) return;
+    var PER_ROW = 22, MAX_ROW = 16;
+    rows.forEach(function (r, i) {
+      r.classList.remove('entering');
+      r.style.animationDelay = (lead + Math.min(i, MAX_ROW) * PER_ROW) + 'ms';
+    });
+    void listEl.offsetWidth;
+    rows.forEach(function (r) { r.classList.add('entering'); });
+    clearTimeout(birdexEntranceT);
+    birdexEntranceT = setTimeout(function () {
+      rows.forEach(function (r) { r.classList.remove('entering'); r.style.animationDelay = ''; });
+    }, lead + MAX_ROW * PER_ROW + 520);
+  }
+
+  // The pose control is the modal's, markup and all: a 30x26 button holding a
+  // 13px glyph, with the label in a hover .tip. Text labels don't fit it - they
+  // overflow the fixed box and collide, and the sliding pill sizes to the
+  // button rather than the words.
+  var ICON_PERCHED = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M3.5 6.5 C 4 4, 6 3, 8 4 C 10 3.6, 11.6 4.6, 12 6.5 L 11.5 8 C 11 9.6, 9.4 10.4, 8 10.4 C 6.4 10.4, 4.8 9.6, 4.2 8 Z"/>'
+    + '<circle cx="10.6" cy="5.7" r=".4" fill="currentColor"/><path d="M12 6.2 L 13.6 5.8"/>'
+    + '<path d="M7.5 10.4 L 7.2 12.2"/><path d="M8.6 10.4 L 8.9 12.2"/><path d="M2 12.6 H 13"/></svg>';
+  var ICON_FLIGHT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M1.5 8 Q 4.5 4, 7.5 7.5 Q 11 4, 14.5 8"/><path d="M7.5 7.5 L 8 9.5"/>'
+    + '<circle cx="8.5" cy="7.2" r=".4" fill="currentColor"/><path d="M8.6 7 L 10 6.6"/></svg>';
+
+  // Detection counts span three orders of magnitude across a life list, so a
+  // linear bar leaves nearly every species pinned at zero width. Log scaling
+  // keeps the ordering honest while giving quiet birds a visible mark. Every
+  // bar on the card must share a denominator family, or a "2 today" reads as
+  // larger than "16 all time".
+  function barFrac(v, max) {
+    if (!(max > 0) || !(v > 0)) return 0;
+    return Math.min(1, Math.log1p(v) / Math.log1p(max));
+  }
+
+  // Three visually distinct tiers, so the badges don't read as one flat row:
+  // guild is solid (every bird has exactly one), traits are outlined (common,
+  // several per bird), and an element is the only place colour appears on the
+  // page at all - which is affordable precisely because it's rare.
+  // The hover line comes from the shipped vocabulary; an element prefers its
+  // per-species note, which says why *this* bird earned it.
+  function typeBadges(ty) {
+    if (!ty) return '';
+    var V = (BIRDEX && BIRDEX.vocab) || {};
+    var out = [];
+    // Flavor rides in a .bx-tip child rather than a title attribute: native
+    // tooltips wait a second or two and render in system chrome, so the help
+    // cursor fired instantly and nothing followed it. This matches the .tip
+    // popups the pose toggle and atlas sort already use.
+    var tip = function (text) {
+      return text ? '<span class="bx-tip">' + esc(text) + '</span>' : '';
+    };
+    var g = (V.guild || {})[ty.guild];
+    if (g) {
+      out.push('<span class="bx-type guild" data-guild="' + esc(ty.guild) + '">'
+        + esc(g.label) + tip(g.flavor) + '</span>');
+    }
+    (ty.traits || []).forEach(function (t) {
+      var d = (V.trait || {})[t];
+      if (d) out.push('<span class="bx-type trait">' + esc(d.label) + tip(d.flavor) + '</span>');
+    });
+    if (ty.element) {
+      var e = (V.element || {})[ty.element] || {};
+      out.push('<span class="bx-type element" data-element="' + esc(ty.element) + '">'
+        + esc(e.label || ty.element) + tip(ty.note || e.flavor) + '</span>');
+    }
+    // Bare spans - the caller decides which badge row they belong to.
+    return out.join('');
+  }
+
+  function statBar(label, value, frac, hint) {
+    return '<div class="bx-stat">'
+      + '<span class="bx-stat-k">' + esc(label) + '</span>'
+      + '<span class="bx-stat-bar"><i style="width:' +
+          Math.max(0, Math.min(100, frac * 100)).toFixed(1) + '%"></i></span>'
+      + '<span class="bx-stat-v">' + esc(value) + (hint ? '<em>' + esc(hint) + '</em>' : '') + '</span>'
+      + '</div>';
+  }
+
+  // Descriptions arrive separately and may not arrive at all. Three states:
+  // loading, present, and absent - the last one being a species that's in the
+  // metadata but has no text, which is a legitimate outcome (a stale cached
+  // half, or an entry the builder couldn't source prose for) and must read as
+  // a deliberate blank rather than a stuck spinner.
+  function fillBlurb(host, slug) {
+    if (!host) return;
+    var ready = BIRDEX_TEXT;
+    if (!ready) host.innerHTML = '<p class="bx-blurb-pending">Loading description…</p>';
+    loadBirdexText().then(function () {
+      // The panel may have been rebuilt for another species while we waited.
+      if (!document.contains(host)) return;
+      var blurb = blurbFor(slug);
+      host.innerHTML = blurb
+        ? blurb.split(/\n{2,}/).map(function (p) { return '<p>' + esc(p) + '</p>'; }).join('')
+        : '<p class="bx-blurb-pending">No description available for this species.</p>';
+    });
+  }
+
+  function renderBirdexEntry(slug) {
+    var el = document.getElementById('birdexEntry');
+    if (!el) return;
+    el.dataset.ready = '1';
+    if (!slug || !BIRDEX) {
+      el.dataset.state = 'empty';
+      el.innerHTML = '<p class="bx-hint">Pick an entry.</p>';
+      return;
+    }
+    var rows = birdexRows();
+    var row = rows.filter(function (r) { return r.slug === slug; })[0];
+    if (!row) { el.dataset.state = 'empty'; el.innerHTML = '<p class="bx-hint">Pick an entry.</p>'; return; }
+
+    var rec = row.rec, life = row.life, caught = !!life;
+    var num = row.unlisted ? 'unlisted' : ('#' + String(rec.n).padStart(3, '0'));
+    el.dataset.state = caught ? 'caught' : 'unseen';
+
+    // Locked: silhouette, no name, and a way out. The reveal is opt-in per
+    // entry rather than a global "show everything" switch, so the dex keeps
+    // its shape - you're spending the surprise one bird at a time.
+    if (!caught && !isRevealed(slug)) {
+      el.dataset.state = 'unseen';
+      el.innerHTML = ''
+        + '<header class="bx-entry-head"><span class="bx-entry-n">' + num + '</span>'
+        + '<span class="bx-badge muted">not registered</span></header>'
+        + '<h2 class="bx-entry-name">???</h2>'
+        + '<p class="bx-entry-sci">&mdash;</p>'
+        + '<div class="bx-screen unseen"><canvas class="bx-sil-big" data-slug="' + esc(slug) + '"></canvas></div>'
+        + '<p class="bx-hint">This one hasn\'t been heard here yet. Its entry fills in the '
+        + 'first time BirdNET-Go picks it up.</p>'
+        + '<div class="bx-unlock">'
+        + '<button type="button" class="chip" id="bxReveal">unlock this entry</button>'
+        + '<span class="bx-unlock-note">Shows the plate and description. Won\'t count as registered.</span>'
+        + '</div>';
+      var big = el.querySelector('canvas.bx-sil-big');
+      if (big && tablesReady && !paintSilhouette(big, slug)) big.classList.add('no-mask');
+      el.querySelector('#bxReveal').addEventListener('click', function () {
+        setRevealed(slug, true);
+        renderBirdex();          // the list row swaps its silhouette for the plate
+        renderBirdexEntry(slug);
+      });
+      return;
+    }
+
+    // Revealed but not heard: everything the database knows, and nothing the
+    // station would have supplied - no counts, no first/last heard, no call.
+    // Showing zeroed stat bars here would imply a detection history of zero
+    // rather than an absence of one.
+    if (!caught) {
+      var art = rec.art !== false;
+      el.dataset.state = 'revealed';
+      el.innerHTML = ''
+        + '<header class="bx-entry-head"><span class="bx-entry-n">' + num + '</span>'
+        + '<span class="bx-badges">'
+        + '<span class="bx-badge-row">'
+        + (rec.iucn ? '<span class="bx-badge" data-iucn="' + esc(rec.iucn) + '">'
+            + esc(IUCN_LABELS[rec.iucn] || rec.iucn) + '</span>' : '')
+        + '<span class="bx-badge muted">unlocked</span></span>'
+        + '<span class="bx-badge-row">' + typeBadges(rec.types) + '</span>'
+        + '</span></header>'
+        + '<h2 class="bx-entry-name">' + esc(rec.com || rec.sci) + '</h2>'
+        + '<p class="bx-entry-sci">' + esc(rec.sci)
+        + (rec.family ? ' <span class="bx-fam">' + esc(rec.family) + '</span>' : '') + '</p>'
+        + '<div class="bx-screen"><img alt="' + esc(rec.com || rec.sci) + '" src="'
+        + esc(art ? illustrationSrc(rec.sci, 1) : proxyImageSrc(rec.sci)) + '"'
+        + (art ? ' onerror="this.onerror=null;this.src=\'' + esc(proxyImageSrc(rec.sci)) + '\'"' : '') + '></div>'
+        + '<p class="bx-hint bx-not-heard">Not heard here yet &mdash; no recordings or detection '
+        + 'history. Unlocked by hand.</p>'
+        + '<div class="bx-blurb" id="bxBlurb"></div>'
+        + '<div class="bx-actions">'
+        + (rec.avibase ? '<a class="chip ext" target="_blank" rel="noopener" href="'
+            + esc(avibaseUrl(rec.avibase)) + '">avibase</a>' : '')
+        + '<a class="chip ext" target="_blank" rel="noopener" href="' + esc(wikiUrl(rec.sci)) + '">wiki</a>'
+        + '<a class="chip ext" target="_blank" rel="noopener" href="' + esc(ebirdUrl(rec.sci)) + '">ebird</a>'
+        + '<button type="button" class="chip" id="bxRelock">re-lock</button>'
+        + '</div>';
+      fillBlurb(el.querySelector('#bxBlurb'), slug);
+      el.querySelector('#bxRelock').addEventListener('click', function () {
+        setRevealed(slug, false);
+        renderBirdex();
+        renderBirdexEntry(slug);
+      });
+      return;
+    }
+
+    // Normalise the bars against the loudest species on the life list, so the
+    // fill reads as "how big is this one relative to everything here" rather
+    // than against an arbitrary constant.
+    var all = (DATA.lifelist && DATA.lifelist.species) || [];
+    var total = +life.n || 0;
+    var maxTotal = all.reduce(function (m, s) { return Math.max(m, +s.n || 0); }, 1);
+    var perDayOf = function (s) {
+      var t = Date.parse((s.first_seen || '').replace(' ', 'T'));
+      var days = isNaN(t) ? 1 : Math.max(1, Math.ceil((Date.now() - t) / 86400000));
+      return (+s.n || 0) / days;
+    };
+    var perDay = perDayOf(life);
+    var maxPerDay = all.reduce(function (m, s) { return Math.max(m, perDayOf(s)); }, 0.001);
+
+    var winBySci = {};
+    var maxWin = 0;
+    ((DATA.recent && DATA.recent.species) || []).forEach(function (s) {
+      winBySci[s.sci] = +s.n; maxWin = Math.max(maxWin, +s.n || 0);
+    });
+    var win = winBySci[life.sci] || 0;
+
+    var iucn = rec.iucn ? IUCN_LABELS[rec.iucn] || rec.iucn : null;
+    var local = rarityLabel(total, life.first_seen);
+    var art = rec.art !== false;
+
+    el.innerHTML = ''
+      + '<header class="bx-entry-head">'
+      + '<span class="bx-entry-n">' + num + '</span>'
+      // One cluster, two rows: status above, typing below. Keeping them in a
+      // single right-aligned block stops the card reading as two unrelated
+      // badge strips separated by the name.
+      + '<span class="bx-badges">'
+      + '<span class="bx-badge-row">'
+      // The global tier is near-constant (most birds are least concern), so it
+      // never stands alone - the local tier is what actually varies here.
+      + (iucn ? '<span class="bx-badge" data-iucn="' + esc(rec.iucn) + '">' + esc(iucn) + '</span>' : '')
+      + '<span class="bx-badge local" data-rarity="' + esc(local) + '">' + esc(local) + ' here</span>'
+      + '</span>'
+      + '<span class="bx-badge-row">' + typeBadges(rec.types) + '</span>'
+      + '</span></header>'
+      + '<h2 class="bx-entry-name">' + esc(rec.com || life.com || rec.sci) + '</h2>'
+      + '<p class="bx-entry-sci">' + esc(rec.sci)
+      + (rec.family ? ' <span class="bx-fam">' + esc(rec.family) + '</span>' : '') + '</p>'
+      + '<div class="bx-body">'
+      + '<div class="bx-screen">'
+      + '<img id="bxPlate" alt="' + esc(rec.com || rec.sci) + '" src="'
+      + esc(art ? illustrationSrc(rec.sci, 1) : proxyImageSrc(rec.sci)) + '"'
+      + (art ? ' onerror="this.onerror=null;this.src=\'' + esc(proxyImageSrc(rec.sci)) + '\'"' : '') + '>'
+      + (art ? '<div class="pose-toggle" id="bxPose" role="tablist" aria-label="Pose">'
+        + '<i class="seg-pill" aria-hidden="true"></i>'
+        + '<button type="button" data-pose="1" aria-current="true" aria-label="perched">'
+        + ICON_PERCHED + '<span class="tip">perched</span></button>'
+        + '<button type="button" data-pose="2" aria-label="in flight">'
+        + ICON_FLIGHT + '<span class="tip">in flight</span></button>'
+        + '</div>' : '')
+      + '</div>'
+      + '<div class="bx-stats">'
+      // Each bar is scaled against the same measure taken across the whole life
+      // list, so bar lengths are comparable down the card and between species.
+      + statBar('detections', fmtN(total), barFrac(total, maxTotal), 'all time')
+      + statBar('per day', perDay.toFixed(perDay >= 10 ? 0 : 1),
+                barFrac(perDay * 100, maxPerDay * 100), 'average')
+      + statBar(windowLabel(currentHours), fmtN(win), barFrac(win, maxWin), 'this window')
+      + '<div class="bx-when">'
+      + '<div><span class="k">first heard</span><span class="v">' + esc(fmtDateLine(
+          (life.first_seen || '').slice(0, 10), (life.first_seen || '').slice(11, 19)) || '-') + '</span></div>'
+      + '<div><span class="k">last heard</span><span class="v">' + esc(fmtDateLine(
+          (life.last_seen || '').slice(0, 10), (life.last_seen || '').slice(11, 19)) || '-') + '</span></div>'
+      + '</div></div></div>'
+      // Filled in by fillBlurb once birdex-text.json lands - which may be
+      // never, if that file is missing or stamp-mismatched.
+      + '<div class="bx-blurb" id="bxBlurb"></div>'
+      + '<div class="bx-actions">'
+      + '<button type="button" class="chip play" id="bxPlay" data-sci="' + esc(rec.sci) + '">'
+      + ICON_PLAY + '<span>call</span></button>'
+      + '<div class="bx-spectro" id="bxSpectro" aria-hidden="true"></div>'
+      + (rec.avibase ? '<a class="chip ext" target="_blank" rel="noopener" href="'
+          + esc(avibaseUrl(rec.avibase)) + '">avibase</a>' : '')
+      + '<a class="chip ext" target="_blank" rel="noopener" href="' + esc(wikiUrl(rec.sci)) + '">wiki</a>'
+      + '<a class="chip ext" target="_blank" rel="noopener" href="' + esc(ebirdUrl(rec.sci)) + '">ebird</a>'
+      + '</div>';
+
+    var pose = el.querySelector('#bxPose');
+    if (pose) {
+      var plate = el.querySelector('#bxPlate');
+      pose.querySelectorAll('button').forEach(function (b) {
+        b.addEventListener('click', function () {
+          pose.querySelectorAll('button').forEach(function (x) {
+            x.setAttribute('aria-current', x === b ? 'true' : 'false');
+          });
+          syncPill(pose);
+          plate.src = illustrationSrc(rec.sci, +b.dataset.pose);
+        });
+      });
+      // syncPill measures offsetWidth/offsetLeft, so it has to run after the
+      // pane is laid out - on a narrow screen the entry is display:none until
+      // birdexSelect reveals it, which would otherwise size the pill to 0.
+      requestAnimationFrame(function () { syncPill(pose); });
+    }
+    fillBlurb(el.querySelector('#bxBlurb'), slug);
+    wireBirdexPlay(el, rec.sci);
+  }
+
+  // Playback for the entry's call button. birdnet-go addresses clips by
+  // detection id, so the newest detection is resolved first (through the same
+  // cache the modal uses) and only then does audio start. Registered with the
+  // page-wide audio coordinator so starting a call stops an atlas card or a
+  // modal recording rather than layering over it.
+  function wireBirdexPlay(root, sci) {
+    var btn = root.querySelector('#bxPlay');
+    var wrap = root.querySelector('#bxSpectro');
+    if (!btn) return;
+    var audio = null;
+    function reset(label) {
+      btn.setAttribute('data-active', 'false');
+      btn.innerHTML = ICON_PLAY + '<span>' + (label || 'call') + '</span>';
+      if (wrap) wrap.style.setProperty('--prog', '0%');
+    }
+    function stop() {
+      audioRelease(stop);
+      if (audio) { try { audio.pause(); } catch (e) { } audio = null; }
+      reset();
+    }
+    btn.addEventListener('click', function () {
+      if (audio) { stop(); return; }
+      audioClaim(stop);
+      btn.setAttribute('data-active', 'true');
+      btn.innerHTML = ICON_PLAY + '<span>...</span>';
+      var cached = SPECIES_CACHE[sci];
+      (cached ? Promise.resolve(cached) : fetchSpeciesDetail(sci).then(function (d) {
+        SPECIES_CACHE[sci] = d; return d;
+      })).then(function (d) {
+        var first = (d.detections || [])[0];
+        if (!first) { reset('no audio'); setTimeout(reset, 2000); return; }
+        var url = audioSrc(first.id);
+        if (wrap && !wrap.firstChild) {
+          var canvas = document.createElement('canvas');
+          wrap.appendChild(canvas);
+          var paint = function (buf) { if (document.contains(canvas)) paintSpectrogram(canvas, buf); };
+          if (_decodedCache[url]) paint(_decodedCache[url]);
+          else {
+            var actx = getSpecCtx();
+            if (actx) {
+              fetch(url).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer();
+              }).then(function (b) { return actx.decodeAudioData(b); })
+                .then(function (buf) { _decodedCache[url] = buf; paint(buf); })
+                .catch(function () { if (wrap.contains(canvas)) wrap.removeChild(canvas); });
+            } else { wrap.removeChild(canvas); }
+          }
+        }
+        audio = new Audio(url);
+        audio.addEventListener('canplay', function () {
+          if (!audio) return;
+          btn.innerHTML = ICON_PAUSE + '<span>stop</span>';
+          audio.play();
+        });
+        audio.addEventListener('timeupdate', function () {
+          if (!audio || !wrap) return;
+          var pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
+          wrap.style.setProperty('--prog', pct.toFixed(1) + '%');
+        });
+        audio.addEventListener('ended', stop);
+        audio.addEventListener('error', function () {
+          audio = null; audioRelease(stop); reset('no audio'); setTimeout(reset, 2000);
+        });
+        audio.load();
+      }).catch(function () { audio = null; audioRelease(stop); reset('no audio'); setTimeout(reset, 2000); });
+    });
+  }
+
+  function birdexSelect(slug) {
+    birdexSel = slug;
+    writeLS('bird:birdexSel', slug || '');
+    var listEl = document.getElementById('birdexList');
+    if (listEl) {
+      listEl.querySelectorAll('.birdex-row[data-active="true"]').forEach(function (r) {
+        r.removeAttribute('data-active');
+      });
+      var row = listEl.querySelector('.birdex-row[data-slug="' + (slug || '').replace(/"/g, '\\"') + '"]');
+      if (row) {
+        row.setAttribute('data-active', 'true');
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    }
+    // Reveal the pane before rendering into it, so anything that measures
+    // itself during render (the pose pill) sees real geometry.
+    document.getElementById('v3').setAttribute('data-pane', slug ? 'entry' : 'list');
+    renderBirdexEntry(slug);
+  }
+
   function renderWindowDependent(animate) {
     // renderStatsLists runs BEFORE drawHistograms so the stats entrance
     // (fired at the end of drawHistograms) can stagger the side-panel rows
@@ -1577,12 +2236,16 @@
     renderStatsLists();
     drawHistograms(animate);
     renderAtlas(animate);
+    // The Birdex list is life-list scoped, so a window change can't add or
+    // remove rows - only the open entry's "this window" stat moves.
+    if (birdexSel) renderBirdexEntry(birdexSel);
   }
   function renderTimeIndependent(animate) {
     // Lists first, then the graph (see renderWindowDependent).
     renderStatsLists();
     drawHistograms(animate);
     renderAtlas(animate);
+    renderBirdex(animate);
   }
 
   function refreshRecent(animate) {
@@ -1639,6 +2302,17 @@
       renderCollageFromData(animate);
     });
   }
+
+  // Start the Birdex metadata immediately. It's ~56KB and the atlas links off
+  // it (eBird codes), so waiting for a view switch would leave the first paint
+  // pointing every ebird chip at the generic explore page. Descriptions are
+  // NOT pulled here - they're the other ~390KB, fetched on first display.
+  loadBirdex().then(function () {
+    try { renderAtlas(); } catch (e) { }
+    try { renderBirdex(); } catch (e) { }
+  }).catch(function (e) {
+    if (window.console) console.warn('birdex.json failed to load', e);
+  });
 
   // Kick off the initial fetch. Renders pull from DATA as soon as it
   // populates; until then the page sits with empty histograms + lists.
@@ -1714,6 +2388,12 @@
     if (!m) return null;
     return decodeURIComponent(m[1]);
   }
+  // #birdex/<slug> deep-links a single entry. Slug rather than sci name so the
+  // link survives the taxonomy drift the alias map exists to absorb.
+  function readBirdexHash() {
+    var m = location.hash.match(/^#birdex\/([a-z0-9-]+)/i);
+    return m ? m[1].toLowerCase() : null;
+  }
   function highlightAtlas(sci) {
     var grid = document.getElementById('atlasGrid');
     if (!grid) return;
@@ -1763,19 +2443,15 @@
     });
   }
 
-  // Wikipedia summary, fetched directly. wiki.php only existed to dodge
-  // CORS, and Wikipedia's REST API sends Access-Control-Allow-Origin: *.
-  function fetchWikiSummary(sci) {
-    return fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(sci))
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); });
-  }
+  // Descriptions used to be fetched live from Wikipedia here. They now ship in
+  // birdex.json (see tools/build-birdex.py), so the deployed page talks only to
+  // its own BirdNET-Go - no third-party call from a visitor's browser at all.
 
   // ---- Detail modal ----
   // Caches per-sci species info so opening the same modal twice doesn't
   // re-fetch. Wikipedia + per-species endpoints are slow over the
   // tunnel; one fetch per session is plenty.
   var SPECIES_CACHE = {};
-  var WIKI_CACHE = {};
   var modalAudio = null;
   var modalRecBtn = null;
   function fmtRecTime(d, t) {
@@ -1975,6 +2651,11 @@
         return j;
       });
     loadSpecies.then(function (j) {
+      // Capture the species this fetch was issued for. Opening a second bird
+      // before /detections resolves would otherwise land the first response in
+      // the second modal - name, counts, rarity and recordings all belonging
+      // to the wrong bird. Same discipline as refreshRecent's window check.
+      if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
       var s = j.summary || {};
       document.getElementById('modalCommon').textContent = s.com || sci;
       document.getElementById('modalAllTime').textContent = (+s.total || 0).toLocaleString();
@@ -2003,23 +2684,32 @@
         }).join('')
         : '<li class="rec-empty">No recordings yet.</li>';
     }).catch(function () {
+      if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
       document.getElementById('modalRecordings').innerHTML = '<li class="rec-empty">Failed to load recordings.</li>';
     });
 
-    // Wikipedia summary (description + genus / family).
-    var loadWiki = WIKI_CACHE[sci]
-      ? Promise.resolve(WIKI_CACHE[sci])
-      : fetchWikiSummary(sci).then(function (j) {
-        WIKI_CACHE[sci] = j; return j;
-      });
-    loadWiki.then(function (j) {
-      var desc = document.getElementById('modalDesc');
-      desc.textContent = j.extract || 'No description available.';
-      desc.classList.toggle('placeholder', !j.extract);
+    // Description, straight from the offline database. This used to call
+    // Wikipedia's REST summary endpoint per species on first open, which meant
+    // a third-party request from every visitor's browser - and it returned the
+    // article's lead section, which is strictly less text than birdex.json
+    // already carries (11 words vs 186 for the hermit thrush). Species off the
+    // roster simply have no description; add them to tools/roster-extra.txt.
+    // Excerpted, not the whole thing: this is a card with the recordings list
+    // below it, not a reading column, and a 300-word blurb would push the
+    // recordings off the bottom. The full text lives in the Birdex entry.
+    var descEl = document.getElementById('modalDesc');
+    // #modalSci holds the open species (set below) - the same handle the
+    // playback code reads. Guards against a second modal opening mid-fetch and
+    // the first response landing in it.
+    loadBirdexText().then(function () {
+      if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
+      var raw = blurbFor(birdexSlugFor(sci));
+      var blurb = raw ? excerpt(raw, 620) : '';
+      descEl.textContent = blurb || 'No description available.';
+      descEl.classList.toggle('placeholder', !blurb);
     }).catch(function () {
-      var desc = document.getElementById('modalDesc');
-      desc.textContent = 'No description available.';
-      desc.classList.add('placeholder');
+      descEl.textContent = 'No description available.';
+      descEl.classList.add('placeholder');
     });
   }
   function closeDetailModal() {
@@ -2184,7 +2874,16 @@
   function syncRouter() {
     window.__lastHashchange = Date.now();
     var sci = readHash();
+    var dex = readBirdexHash();
     if (location.hash === '#about') openAbout(); else closeAbout();
+    if (dex) {
+      // A Birdex deep link owns the view outright - it isn't an overlay, so it
+      // never captures viewBeforeDetail and never opens the detail modal.
+      highlightAtlas(null); closeDetailModal();
+      go(3);
+      loadBirdex().then(function () { birdexSelect(dex); }).catch(function () { });
+      return;
+    }
     if (sci) {
       if (viewBeforeDetail === null) viewBeforeDetail = currentView;
       go(2); highlightAtlas(sci); openDetailModal(sci);
@@ -2198,7 +2897,7 @@
   if (location.hash === '#about') openAbout();
   // Initial load with a #sci= hash: route through syncRouter so the card opens
   // over the atlas and closing it falls back to the collage.
-  if (readHash()) syncRouter();
+  if (readHash() || readBirdexHash()) syncRouter();
   window.addEventListener('hashchange', syncRouter);
 
   // Modal interactions: backdrop / close button -> clear the hash.
@@ -2618,6 +3317,45 @@
     var tlCol = ev.target.closest('.stats-tl-col[data-sci]');
     if (tlCol) return jumpToSci(tlCol.dataset.sci);
   });
+
+  // ---- Birdex interactions ----
+  // Selection routes through the hash rather than being applied directly, so
+  // an entry is linkable and the browser's back button walks the entries the
+  // same way it walks detail cards.
+  (function wireBirdex() {
+    var v3 = document.getElementById('v3');
+    if (!v3) return;
+    var listEl = document.getElementById('birdexList');
+    var search = document.getElementById('birdexSearch');
+
+    listEl.addEventListener('click', function (ev) {
+      var row = ev.target.closest && ev.target.closest('.birdex-row');
+      if (!row) return;
+      var slug = row.dataset.slug;
+      // Re-clicking the open entry can't fire hashchange, so apply directly.
+      if (location.hash.toLowerCase() === '#birdex/' + slug) birdexSelect(slug);
+      else location.hash = '#birdex/' + slug;
+    });
+
+    if (search) {
+      search.addEventListener('input', function () {
+        birdexQuery = search.value || '';
+        renderBirdex();
+      });
+    }
+
+    var back = document.getElementById('birdexBack');
+    if (back) {
+      back.addEventListener('click', function () { v3.setAttribute('data-pane', 'list'); });
+    }
+
+    // Restore the last entry viewed - recorded now, drawn when renderBirdex
+    // first runs, so this doesn't drag birdex.json onto the load path. The
+    // pane deliberately stays on the list: on a narrow screen, landing inside
+    // an entry you didn't just pick reads as being stuck, not as restored.
+    var last = readLS('bird:birdexSel', '');
+    if (last && !readBirdexHash()) birdexSel = last;
+  })();
 
   // After the atlas re-renders (window change, fresh fetch), re-apply
   // any active hash so the highlight survives a rebuild.

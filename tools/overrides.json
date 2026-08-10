@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Per-slug hand-written fields that beat every fetched source. Use when",
+    "Wikidata is wrong, or a Wikipedia intro is useless as a dex blurb.",
+    "Any subset of: com, family, iucn, avibase, ebird, blurb.",
+    "",
+    "Example:",
+    "  \"corvus-corax\": { \"blurb\": \"Big, smart, holds a grudge.\" }"
+  ],
+
+  "_ebird_comment": [
+    "These two carried a different eBird code in apt.js's hand-written",
+    "EBIRD_CODES table than Wikidata's P3444 reports. eBird redirects",
+    "anonymous species pages to a login, so neither could be verified from",
+    "here - the hand-written values are kept because they were what the site",
+    "actually shipped, and this is where to correct them if they're wrong."
+  ],
+  "aphelocoma-californica": { "ebird": "cascj1" },
+  "larus-occidentalis": { "ebird": "wegull" }
+}
