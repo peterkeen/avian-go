@@ -2617,6 +2617,11 @@
         return j;
       });
     loadSpecies.then(function (j) {
+      // Capture the species this fetch was issued for. Opening a second bird
+      // before /detections resolves would otherwise land the first response in
+      // the second modal - name, counts, rarity and recordings all belonging
+      // to the wrong bird. Same discipline as refreshRecent's window check.
+      if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
       var s = j.summary || {};
       document.getElementById('modalCommon').textContent = s.com || sci;
       document.getElementById('modalAllTime').textContent = (+s.total || 0).toLocaleString();
@@ -2645,6 +2650,7 @@
         }).join('')
         : '<li class="rec-empty">No recordings yet.</li>';
     }).catch(function () {
+      if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
       document.getElementById('modalRecordings').innerHTML = '<li class="rec-empty">Failed to load recordings.</li>';
     });
 
