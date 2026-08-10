@@ -80,5 +80,7 @@ need to allow the origin in its CORS config.
 
 ## License
 
+CC-BY-NC-SA-4.0
+
 Illustrations and original front-end are teddy's; see
-[AvianVisitors](https://github.com/Twarner491/AvianVisitors) for terms.
+[AvianVisitors](https://github.com/Twarner491/AvianVisitors) 
