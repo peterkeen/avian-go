@@ -10,7 +10,7 @@
 <!-- Apply the saved theme before first paint so dark mode doesn't flash
      light on load. The full switcher lives in Settings (writes bird:theme). -->
 <script>try{if(localStorage.getItem('bird:theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}</script>
-<link rel="stylesheet" href="./styles.css?v=r12">
+<link rel="stylesheet" href="./styles.css?v=r18">
 </head>
 <body class="av-local">
 <header class="top">
@@ -96,6 +96,38 @@
       <div class="atlas-grid" id="atlasGrid"></div>
     </section>
 
+    <!-- ========== View 4 - Birdex ========== -->
+    <!-- A numbered field guide over the bundled illustration set. Species the
+         station has heard are registered and show their plate + stats; the
+         rest stay silhouetted at ???. Reference data comes from birdex.json,
+         built offline by tools/build-birdex.py - no runtime third-party calls.
+         data-pane switches list/entry on narrow screens; both show at once
+         on desktop. -->
+    <section class="view" id="v3" aria-label="Birdex" data-pane="list">
+      <div class="birdex">
+        <div class="birdex-pane-list">
+          <div class="birdex-head">
+            <div class="birdex-tally">
+              <strong id="birdexSeen">0</strong><span class="of">/</span><span id="birdexTotal">0</span>
+              <span class="lbl">registered</span>
+            </div>
+            <div class="birdex-meter"><i id="birdexMeter"></i></div>
+            <p class="birdex-note" id="birdexNote"></p>
+            <input type="search" id="birdexSearch" class="birdex-search"
+                   placeholder="name, family, type, or #number" aria-label="search the birdex"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div class="birdex-list" id="birdexList"></div>
+        </div>
+        <div class="birdex-pane-entry">
+          <button type="button" class="birdex-back" id="birdexBack" aria-label="back to list">← list</button>
+          <div class="birdex-entry" id="birdexEntry" data-state="empty">
+            <p class="bx-hint">Pick an entry.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </div>
 </main>
 
@@ -177,10 +209,11 @@
   <button type="button" data-i="0" aria-current="true">collage</button>
   <button type="button" data-i="1">stats</button>
   <button type="button" data-i="2">atlas</button>
+  <button type="button" data-i="3">birdex</button>
 </nav>
 
 
 
-<script src="./apt.js?v=r12"></script>
+<script src="./apt.js?v=r18"></script>
 </body>
 </html>

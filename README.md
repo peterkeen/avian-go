@@ -30,7 +30,7 @@ into the records the original renderers already expected.
 | `?action=species&sci=` | `/detections?species=` |
 | `cutout.php?sci=` | bundled PNG, falling back to `/media/image/:name` |
 | `recording.php?file=` | `/audio/:id` |
-| `wiki.php?sci=` | Wikipedia's REST API, called directly |
+| `wiki.php?sci=` | `birdex-text.json`, built offline (see The Birdex) |
 | 30s polling loop | `/detections/stream` (SSE), with a slow poll as fallback |
 
 Two differences worth knowing about:
@@ -50,15 +50,107 @@ This is a read-only view.
 ```
 public/
   index.html
-  apt.js               # collage, atlas, modal, and the API adapter
+  apt.js               # collage, atlas, birdex, modal, and the API adapter
   styles.css
   dims.json            # illustration dimensions, keyed by species slug
   masks.json           # alpha bitmasks for collage nesting + hit-testing
+  birdex.json          # species metadata + typing (see The Birdex)
+  birdex-text.json     # species descriptions, loaded on first display
   assets/illustrations # 666 kachō-e PNGs (~419MB)
+tools/
+  build-birdex.py      # builds both birdex files; run by hand, output committed
+  audit-types.py       # cross-checks badges against descriptions; reports only
+  types.json           # guild / trait / element tables, by family + overrides
+  aliases.json         # taxonomy fixups (lookup, runtime slug map, merges)
+  roster-extra.txt     # species to include that have no bundled art
+  overrides.json       # hand-written fields that beat every fetched source
 ```
 
 `assets/illustrations` is most of the repo. Species without a bundled
 illustration fall back to BirdNET-Go's image proxy.
+
+## The Birdex
+
+A fourth view: a numbered field guide over the illustration set. All 330
+species hold a permanent number. Ones this station has heard are *registered*
+and show their plate, typing, stats, rarity and a description; the rest stay
+silhouetted at `???`, drawn from `masks.json` so a full-roster list costs zero
+requests against the 419MB illustration directory — and never reveals art for a
+bird you haven't found. A locked entry can be unlocked by hand, which shows
+everything the database knows but deliberately no detection history, and never
+counts toward the registered tally. Entries deep-link as `#birdex/<slug>`.
+
+Search matches name, scientific name, family, type and `#number`. Locked
+entries match too and show their names for the duration of the query, so a bird
+you know exists is findable — the plate still stays hidden.
+
+### Typing
+
+Every species carries one **guild** (how it makes a living) and any number of
+**traits** (how it nests, forages, behaves), both derived from taxonomic family
+in `tools/types.json`. Family is a global signal, so a European or Australian
+bird added later types correctly without touching the table. Species-level
+overrides handle what family can't predict — kestrels nest in cavities though
+no other falcon here does; five of twenty-one ducks use tree holes rather than
+the ground.
+
+A few birds also carry a hand-awarded **element**, each with its own note
+explaining why that one earned it. They stay scarce on purpose — 15 of 330.
+Black-backed Woodpecker is fire-type because it moves into stands of freshly
+burned pine within a year of a burn.
+
+`tools/audit-types.py` cross-checks every entry's badges against its own
+description and reports mismatches. It found the ducks, the kestrel, and that
+`colonial` was wrong for most of Icteridae. Expect roughly two thirds false
+positives — "the Carolina Colony", "may imitate the call", "nocturnal migrants",
+and birds that are brood-parasite *victims* all match naive patterns — so it
+reports and never edits.
+
+### Data
+
+Reference data is built offline and committed, so the deployed page makes **no
+third-party calls at all** — the detail modal reads its description from here
+too, rather than calling Wikipedia from every visitor's browser.
+
+| field | source |
+| --- | --- |
+| Avibase ID → species deep link | Wikidata `P2026` (97.9%) |
+| IUCN Red List category | Wikidata `P141` (96.4%) |
+| family | Wikidata `P171*` → `P225` (100%) |
+| eBird code | Wikidata `P3444` (99.4%) |
+| common name + description | Wikipedia extracts (100%, median ~186 words) |
+
+Two files, split by load cost and sharing a content stamp: `birdex.json` (~78KB
+— metadata, typing and the type vocabulary) loads eagerly because the list and
+every outbound link need it, and `birdex-text.json` (~395KB — descriptions
+only) is fetched the first time something displays prose. If the stamps ever
+disagree — a stale cached half — the text side is discarded rather than
+rendered against the wrong roster, and entries fall back to an explicit "no
+description available".
+
+The roster is 330, not 333: the illustration set files three species under both
+their old and new genus (`regulus-calendula` *and* `corthylio-calendula` are one
+Ruby-crowned Kinglet). Those are merged via `aliases.merge`, so BirdNET-Go
+reporting either name registers the same entry rather than stranding a twin that
+can never be found. The build **fails** if two entries share an Avibase ID or
+eBird code without a merge declared — which is how all three were caught.
+
+Avibase is never fetched. It sits behind a Cloudflare managed challenge that
+403s everything including `/robots.txt`, so the identifiers come from Wikidata
+and we only link out.
+
+```sh
+python3 tools/build-birdex.py                # fetch only what's new
+python3 tools/build-birdex.py --report       # list incomplete entries
+python3 tools/build-birdex.py --refresh SLUG # refetch one species
+python3 tools/audit-types.py                 # badges vs. descriptions
+```
+
+To add a bird, append a scientific name to `tools/roster-extra.txt` and rebuild;
+only the new names are fetched and existing dex numbers never change. A full
+rebuild is 1 Wikidata query, 17 batched Wikipedia calls, and a targeted top-up
+pass for species whose lead section is too thin to read as an entry (that pass
+can't be batched — the API forces `exlimit=1` for article bodies).
 
 ## Deploying
 

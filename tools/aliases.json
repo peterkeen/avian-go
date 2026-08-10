@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Two different maps. Don't conflate them.",
+    "",
+    "lookup: roster slug -> the scientific name to QUERY Wikidata/Wikipedia under.",
+    "  Build-time only. Use when the name the art is filed under doesn't resolve.",
+    "",
+    "slug: scientific name BirdNET-Go REPORTS -> the roster slug it should register.",
+    "  Ships to the browser inside birdex.json. Without an entry here, a species",
+    "  whose taxonomy moved stays permanently dark in the Birdex even though the",
+    "  station has heard it."
+  ],
+
+  "lookup": {
+    "leiothlypis-lucidae": "Leiothlypis luciae",
+    "pica-nuttalli": "Pica nuttallii",
+    "dryobates-villosus": "Leuconotopicus villosus"
+  },
+
+  "slug": {
+    "astur-gentilis": "accipiter-gentilis",
+    "astur-atricapillus": "accipiter-gentilis"
+  },
+
+  "_merge_comment": [
+    "duplicate slug -> canonical slug, for when the illustration set files ONE",
+    "species under two genus names. The duplicate is dropped from the roster",
+    "(no phantom number, no permanently-dark twin) and folded into the runtime",
+    "slug map, so BirdNET-Go reporting either name registers the same entry.",
+    "Canonical is the modern name, since that's what the model reports.",
+    "The build fails if two entries share an Avibase ID or eBird code without",
+    "a merge here - that's how these three were caught."
+  ],
+  "merge": {
+    "regulus-calendula": "corthylio-calendula",
+    "phalacrocorax-auritus": "nannopterum-auritum",
+    "oreothlypis-ruficapilla": "leiothlypis-ruficapilla"
+  }
+}
