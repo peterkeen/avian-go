@@ -1454,65 +1454,99 @@
         audioClaim(stopCurrent);   // stop any modal-recording / live-stream audio
         setBtnState(btn, 'loading');
         currentBtn = btn;
-        // Render the spectrogram client-side from the recording's audio so
-        // it matches the active theme. paintSpectrogram paints with the
-        // --paper/--ink palette per data-theme (the same canvas the modal
-        // recordings use), instead of a fixed-colour PNG that can't follow
-        // light/dark mode. Decoded buffers are cached per URL.
-        var spectroWrap = card.querySelector('.spectro-wrap');
-        if (spectroWrap && !spectroWrap.firstChild) {
-          var canvas = document.createElement('canvas');
-          spectroWrap.appendChild(canvas);
-          var aurl = card.dataset.audio;
-          if (_decodedCache[aurl]) {
-            paintSpectrogram(canvas, _decodedCache[aurl]);
-          } else {
-            var actx = getSpecCtx();
-            if (actx) {
-              fetch(aurl)
-                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-                .then(function (b) { return actx.decodeAudioData(b); })
-                .then(function (buf) {
-                  _decodedCache[aurl] = buf;
-                  // Guard on document containment, not spectroWrap.contains:
-                  // a 30s refreshAll() poll can rebuild the atlas and detach
-                  // this card mid-decode. The detached wrap still "contains"
-                  // its canvas, but a detached node measures 0x0, which would
-                  // trap paintSpectrogram in its size-retry loop forever.
-                  if (document.contains(canvas)) paintSpectrogram(canvas, buf);
-                })
-                .catch(function () { if (spectroWrap.contains(canvas)) spectroWrap.removeChild(canvas); });
-            } else {
-              spectroWrap.removeChild(canvas);
-            }
-          }
-        }
-        // Start audio.
-        var audio = new Audio(card.dataset.audio);
-        audio.addEventListener('canplay', function () {
-          if (currentBtn !== btn) return; // user clicked away
-          setBtnState(btn, 'playing');
-          card.setAttribute('data-playing', 'true');
-          audio.play();
-        });
-        // Progress bar on the spectrogram strip.
-        audio.addEventListener('timeupdate', function () {
-          if (currentBtn !== btn) return;
-          var pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
-          if (spectroWrap) spectroWrap.style.setProperty('--prog', pct.toFixed(1) + '%');
-        });
-        audio.addEventListener('ended', function () {
-          if (currentBtn === btn) stopCurrent();
-        });
-        audio.addEventListener('error', function () {
-          if (currentBtn === btn) {
+
+        // Atlas rows come from the analytics summary, which has counts but no
+        // detection ids. Resolve the newest detection on first play, then cache
+        // the full species response for the detail modal and later plays.
+        var sci = card.dataset.sci;
+        var loadSpecies = SPECIES_CACHE[sci]
+          ? Promise.resolve(SPECIES_CACHE[sci])
+          : fetchSpeciesDetail(sci).then(function (d) {
+            SPECIES_CACHE[sci] = d; return d;
+          });
+        loadSpecies.then(function (d) {
+          // The user may have stopped playback or the atlas may have rebuilt
+          // while the request was in flight.
+          if (currentBtn !== btn || !document.contains(card)) return;
+          var first = (d.detections || [])[0];
+          if (!first || first.id == null) {
+            audioRelease(stopCurrent);
             setBtnState(btn, 'missing');
             clearProgressOn(card);
-            currentAudio = null; currentBtn = null;
+            currentBtn = null;
+            return;
           }
+          var aurl = audioSrc(first.id);
+
+          // Render the spectrogram client-side from the recording's audio so
+          // it matches the active theme. paintSpectrogram paints with the
+          // --paper/--ink palette per data-theme (the same canvas the modal
+          // recordings use), instead of a fixed-colour PNG that can't follow
+          // light/dark mode. Decoded buffers are cached per URL.
+          var spectroWrap = card.querySelector('.spectro-wrap');
+          if (spectroWrap && !spectroWrap.firstChild) {
+            var canvas = document.createElement('canvas');
+            spectroWrap.appendChild(canvas);
+            if (_decodedCache[aurl]) {
+              paintSpectrogram(canvas, _decodedCache[aurl]);
+            } else {
+              var actx = getSpecCtx();
+              if (actx) {
+                fetch(aurl)
+                  .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+                  .then(function (b) { return actx.decodeAudioData(b); })
+                  .then(function (buf) {
+                    _decodedCache[aurl] = buf;
+                    // Guard on document containment, not spectroWrap.contains:
+                    // a 30s refreshAll() poll can rebuild the atlas and detach
+                    // this card mid-decode. The detached wrap still "contains"
+                    // its canvas, but a detached node measures 0x0, which would
+                    // trap paintSpectrogram in its size-retry loop forever.
+                    if (document.contains(canvas)) paintSpectrogram(canvas, buf);
+                  })
+                  .catch(function () { if (spectroWrap.contains(canvas)) spectroWrap.removeChild(canvas); });
+              } else {
+                spectroWrap.removeChild(canvas);
+              }
+            }
+          }
+
+          // Start audio only after the detection id has been resolved.
+          var audio = new Audio(aurl);
+          audio.addEventListener('canplay', function () {
+            if (currentBtn !== btn) return; // user clicked away
+            setBtnState(btn, 'playing');
+            card.setAttribute('data-playing', 'true');
+            audio.play().catch(function () {
+              if (currentBtn === btn) stopCurrent();
+            });
+          });
+          // Progress bar on the spectrogram strip.
+          audio.addEventListener('timeupdate', function () {
+            if (currentBtn !== btn) return;
+            var pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
+            if (spectroWrap) spectroWrap.style.setProperty('--prog', pct.toFixed(1) + '%');
+          });
+          audio.addEventListener('ended', function () {
+            if (currentBtn === btn) stopCurrent();
+          });
+          audio.addEventListener('error', function () {
+            if (currentBtn === btn) {
+              audioRelease(stopCurrent);
+              setBtnState(btn, 'missing');
+              clearProgressOn(card);
+              currentAudio = null; currentBtn = null;
+            }
+          });
+          currentAudio = audio;
+          audio.load();
+        }).catch(function () {
+          if (currentBtn !== btn) return;
+          audioRelease(stopCurrent);
+          setBtnState(btn, 'missing');
+          clearProgressOn(card);
+          currentAudio = null; currentBtn = null;
         });
-        currentAudio = audio;
-        audio.load();
       });
     });
 
