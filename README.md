@@ -56,6 +56,8 @@ public/
   masks.json           # alpha bitmasks for collage nesting + hit-testing
   birdex.json          # species metadata + typing (see The Birdex)
   birdex-text.json     # species descriptions, loaded on first display
+  config-loader.js     # loads optional deployment-local config.js
+  config.example.js    # documented configuration template
   assets/illustrations # 666 kachō-e PNGs (~419MB)
 tools/
   build-birdex.py      # builds both birdex files; run by hand, output committed
@@ -152,6 +154,51 @@ rebuild is 1 Wikidata query, 17 batched Wikipedia calls, and a targeted top-up
 pass for species whose lead section is too thin to read as an entry (that pass
 can't be batched — the API forces `exlimit=1` for article bodies).
 
+## Customizing a deployment
+
+`public/config.js` is optional. If it does not exist—or returns 404—the built-in
+defaults are used. Copy `public/config.example.js` to `public/config.js` on the
+served site and edit the values you need:
+
+```js
+window.AVIAN_CONFIG = {
+  enabledViews: {
+    collage: true,
+    stats: true,
+    atlas: true,
+    birdex: false
+  },
+  defaultTimePeriod: "24H",       // 1H, 12H, 24H, 7D, or ALL
+  timePeriodPickerVisible: true,
+  siteName: "your birds",
+  apiUrl: ""                      // same-origin; omit /api/v2
+};
+```
+
+Settings:
+
+- **`enabledViews`** enables or disables `collage`, `stats`, `atlas`, and `birdex`.
+  Missing keys default to `true`; if all four are disabled, collage is enabled
+  as a safety fallback. Disabled views are removed from navigation. Their
+  view-owned assets are not requested: disabling Birdex skips
+  `birdex.json`/`birdex-text.json`, and disabling both Collage and Birdex skips
+  `dims.json`/`masks.json`.
+- **`defaultTimePeriod`** is the initial window when the visitor has no saved
+  choice. If the picker is hidden, it is always the window used.
+- **`timePeriodPickerVisible`** controls the top time-window picker.
+- **`siteName`** replaces “your birds” in the browser title, masthead, and About
+  dialog eyebrow.
+- **`apiUrl`** is the BirdNET-Go origin, such as
+  `https://birdnet.example.com`. Leave it empty for same-origin. Do not append
+  `/api/v2`; the app adds it. A separate host must permit this page's origin in
+  its CORS configuration.
+
+`config.js` is ignored by Git and is not included in the published bundle.
+Keep it beside the deployed static files so package upgrades can replace the
+application without replacing local settings. The published bundle includes
+`config.example.js` as a starting point. Because loading is optional, a missing
+`config.js` produces one harmless 404 request during startup.
+
 ## Deploying
 
 Pushing to `main` packs `public/` into a tarball and publishes it to Forgejo's
@@ -167,8 +214,8 @@ cd public && python3 -m http.server 8000
 ```
 
 The API base is same-origin by default. To develop against a BirdNET-Go on
-another host, set `window.BNG_API_BASE` before `apt.js` loads — that host will
-need to allow the origin in its CORS config.
+another host, copy `config.example.js` to `config.js`, set `apiUrl`, and ensure
+that host allows the development server's origin in its CORS configuration.
 
 ## License
 

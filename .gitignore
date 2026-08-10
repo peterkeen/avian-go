@@ -8,3 +8,4 @@ tramp
 .\#*
 .env
 .DS_Store
+/public/config.js

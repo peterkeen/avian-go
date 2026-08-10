@@ -27,7 +27,7 @@
 
 <main class="stage">
   <header class="static-head">
-    <button type="button" class="pre" id="aboutLink">your birds</button>
+    <button type="button" class="pre" id="aboutLink" data-site-name>your birds</button>
     <h1 id="staticTitle">Heard Recently</h1>
   </header>
   <div class="views" id="views">
@@ -197,7 +197,7 @@
   <div class="modal-backdrop" data-close="1"></div>
   <div class="about-card" role="document">
     <button type="button" class="modal-close" data-close="1" aria-label="close">×</button>
-    <p class="about-eyebrow">your birds</p>
+    <p class="about-eyebrow" data-site-name>your birds</p>
     <h2 id="aboutTitle">The birds outside your window</h2>
     <p class="about-body">A tiny microphone identifies every passing bird with Cornell's <a href="https://birdnet.cornell.edu/" target="_blank" rel="noopener">BirdNET</a>. Each species shows up as an illustration in the collage, sized by how often it's been heard.</p>
     <button type="button" class="about-explore" data-close="1">explore the birds →</button>
@@ -206,14 +206,15 @@
 
 <nav class="slider" id="slider" aria-label="View">
   <i class="seg-pill" aria-hidden="true"></i>
-  <button type="button" data-i="0" aria-current="true">collage</button>
-  <button type="button" data-i="1">stats</button>
-  <button type="button" data-i="2">atlas</button>
-  <button type="button" data-i="3">birdex</button>
+  <button type="button" data-view="collage" data-i="0" aria-current="true">collage</button>
+  <button type="button" data-view="stats" data-i="1">stats</button>
+  <button type="button" data-view="atlas" data-i="2">atlas</button>
+  <button type="button" data-view="birdex" data-i="3">birdex</button>
 </nav>
 
 
 
-<script src="./apt.js?v=r18"></script>
+<script src="./config-loader.js?v=r19"></script>
+<script src="./apt.js?v=r19"></script>
 </body>
 </html>

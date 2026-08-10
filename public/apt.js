@@ -1,4 +1,35 @@
 (function () {
+  function start() {
+  // config-loader.js resolves this entry point only after optional config.js
+  // has loaded (or cleanly 404ed), so startup never races deployment settings.
+  var RAW_CONFIG = window.AVIAN_CONFIG || {};
+  var VIEW_KEYS = ['collage', 'stats', 'atlas', 'birdex'];
+  var DEFAULT_CONFIG = {
+    views: { collage: true, stats: true, atlas: true, birdex: true },
+    defaultTimePeriod: '24H',
+    timePeriodPickerVisible: true,
+    siteName: 'your birds',
+    apiUrl: ''
+  };
+  var PERIOD_HOURS = { '1H': 1, '12H': 12, '24H': 24, '7D': 168, 'ALL': 1000000 };
+  var CONFIG = {
+    views: {},
+    defaultTimePeriod: String(RAW_CONFIG.defaultTimePeriod || DEFAULT_CONFIG.defaultTimePeriod).toUpperCase(),
+    timePeriodPickerVisible: RAW_CONFIG.timePeriodPickerVisible !== false,
+    siteName: typeof RAW_CONFIG.siteName === 'string' && RAW_CONFIG.siteName.trim()
+      ? RAW_CONFIG.siteName.trim() : DEFAULT_CONFIG.siteName,
+    apiUrl: typeof RAW_CONFIG.apiUrl === 'string' ? RAW_CONFIG.apiUrl.trim().replace(/\/$/, '') : ''
+  };
+  var configuredViews = RAW_CONFIG.enabledViews || RAW_CONFIG.views;
+  VIEW_KEYS.forEach(function (key) {
+    CONFIG.views[key] = !configuredViews || configuredViews[key] !== false;
+  });
+  if (!VIEW_KEYS.some(function (key) { return CONFIG.views[key]; })) CONFIG.views.collage = true;
+  if (!PERIOD_HOURS[CONFIG.defaultTimePeriod]) CONFIG.defaultTimePeriod = DEFAULT_CONFIG.defaultTimePeriod;
+
+  // Apply deployment-level presentation settings before wiring controls.
+  document.title = CONFIG.siteName;
+  document.querySelectorAll('[data-site-name]').forEach(function (el) { el.textContent = CONFIG.siteName; });
   var PLACEHOLDER = [{ "sci": "Calypte anna", "com": "Anna's Hummingbird", "featured": true }, { "sci": "Passer domesticus", "com": "House Sparrow" }, { "sci": "Haemorhous mexicanus", "com": "House Finch" }, { "sci": "Turdus migratorius", "com": "American Robin" }, { "sci": "Zenaida macroura", "com": "Mourning Dove" }, { "sci": "Spinus psaltria", "com": "Lesser Goldfinch" }, { "sci": "Zonotrichia leucophrys", "com": "White-crowned Sparrow" }, { "sci": "Aphelocoma californica", "com": "California Scrub-Jay" }, { "sci": "Mimus polyglottos", "com": "Northern Mockingbird" }, { "sci": "Sayornis nigricans", "com": "Black Phoebe" }, { "sci": "Larus occidentalis", "com": "Western Gull" }, { "sci": "Corvus brachyrhynchos", "com": "American Crow" }];
   // Bumped whenever the offline sketch build changes, so the browser
   // doesn't keep a stale cache after we regenerate the sketches.
@@ -50,17 +81,57 @@
   // ---- Slider ----
   var views = document.getElementById('views');
   var slider = document.getElementById('slider');
-  var btns = [].slice.call(slider.querySelectorAll('button'));
   var winPick = document.getElementById('winPick');
+  var enabledViews = [];
+  VIEW_KEYS.forEach(function (key, sourceIndex) {
+    var view = document.getElementById('v' + sourceIndex);
+    var button = slider.querySelector('button[data-view="' + key + '"]');
+    if (!CONFIG.views[key]) {
+      // Keep the DOM available because shared routing/detail code references
+      // these nodes, but take the view out of layout and navigation.
+      if (view) view.hidden = true;
+      if (button) button.remove();
+      return;
+    }
+    if (view) {
+      view.hidden = false;
+      view.dataset.viewIndex = enabledViews.length;
+      enabledViews.push({ key: key, sourceIndex: sourceIndex, el: view, button: button });
+    }
+  });
+  var btns = enabledViews.map(function (v, i) {
+    if (v.button) {
+      v.button.dataset.i = i;
+      v.button.setAttribute('aria-current', i === 0 ? 'true' : 'false');
+    }
+    return v.button;
+  }).filter(Boolean);
+  if (!CONFIG.timePeriodPickerVisible) winPick.hidden = true;
+  function viewEnabled(key) { return !!CONFIG.views[key]; }
+  function viewIndex(key) {
+    for (var i = 0; i < enabledViews.length; i++) if (enabledViews[i].key === key) return i;
+    return -1;
+  }
+  function goView(key) {
+    var i = viewIndex(key);
+    if (i < 0) i = 0;
+    go(i);
+  }
+  function currentViewKey() {
+    return enabledViews[currentView] ? enabledViews[currentView].key : enabledViews[0].key;
+  }
 
   // Each view's title text. The shared static-head shows one of these
   // based on the current view; identical adjacent values mean the title
   // stays put with no fade (collage and stats both say Heard Recently).
-  var VIEW_TITLES = ['Heard Recently', 'Heard Recently', 'Avian Visitors', 'The Birdex'];
+  var VIEW_TITLES = {
+    collage: 'Heard Recently', stats: 'Heard Recently',
+    atlas: 'Avian Visitors', birdex: 'The Birdex'
+  };
   var staticHead = document.querySelector('.static-head');
   var staticTitle = document.getElementById('staticTitle');
   function setTitleForView(i) {
-    var next = VIEW_TITLES[i];
+    var next = VIEW_TITLES[enabledViews[i] ? enabledViews[i].key : 'collage'];
     if (!staticTitle || staticTitle.textContent === next) return;
     // Fade out -> swap text -> fade in. The opacity transition is 240ms;
     // we swap at ~half that so the eye doesn't catch the text change.
@@ -83,12 +154,12 @@
   var SLIDE_MS = 480;
   var SWITCH_LEAD = SLIDE_MS - 100;   // atlas
   var STATS_LEAD = SLIDE_MS - 200;    // stats - begin a touch sooner
-  var currentView = 0;                // collage shows first (no go() needed)
+  var currentView = 0;                // first enabled view shows first
   function go(i) {
-    i = Math.max(0, Math.min(3, i));
+    i = Math.max(0, Math.min(enabledViews.length - 1, i));
     // Only a genuine view *switch* replays the entrance. go() also fires when
-    // a card is expanded (it sets the #sci= hash, which routes through go(2))
-    // while already on the atlas - that must not retrigger the load-in.
+    // a card is expanded while already on the atlas; that must not retrigger
+    // the load-in.
     var switching = (i !== currentView);
     currentView = i;
     views.style.transform = 'translateX(-' + (i * 100) + '%)';
@@ -96,15 +167,11 @@
     syncPill(slider);
     setTitleForView(i);
     if (!switching) return;
-    // Replay the view's entrance animation on switch (collage bloom,
-    // stats left-to-right, atlas row-by-row).
-    if (i === 0) playCollageEntrance();
-    else if (i === 1) playStatsEntrance(STATS_LEAD);
-    else if (i === 2) playAtlasEntrance(SWITCH_LEAD);
-    // Just replay the cascade - the list is already built by the time you can
-    // switch to it, and rebuilding 331 rows plus repainting their silhouettes
-    // on every tab switch would be pure waste.
-    else if (i === 3) playBirdexEntrance(SWITCH_LEAD);
+    var key = enabledViews[i].key;
+    if (key === 'collage') playCollageEntrance();
+    else if (key === 'stats') playStatsEntrance(STATS_LEAD);
+    else if (key === 'atlas') playAtlasEntrance(SWITCH_LEAD);
+    else if (key === 'birdex') playBirdexEntrance(SWITCH_LEAD);
   }
   btns.forEach(function (b) { b.addEventListener('click', function () { go(+b.dataset.i); }); });
 
@@ -150,7 +217,10 @@
   }
   applyTheme(readLS('bird:theme', 'light'));
   var winBtns = [].slice.call(winPick.querySelectorAll('button'));
-  var currentHours = +readLS('bird:window', '24') || 24;
+  var defaultHours = PERIOD_HOURS[CONFIG.defaultTimePeriod];
+  var currentHours = CONFIG.timePeriodPickerVisible
+    ? (+readLS('bird:window', String(defaultHours)) || defaultHours)
+    : defaultHours;
   winBtns.forEach(function (b) {
     b.setAttribute('aria-current', (+b.dataset.h === currentHours) ? 'true' : 'false');
   });
@@ -167,7 +237,8 @@
   // Initial pill placement (after layout settles) + on resize.
   // Atlas sort segmented control - same pill-on-recess pattern.
   var atlasSortEl = document.getElementById('atlasSort');
-  var atlasSortBtns = atlasSortEl ? [].slice.call(atlasSortEl.querySelectorAll('button')) : [];
+  var atlasSortBtns = viewEnabled('atlas') && atlasSortEl
+    ? [].slice.call(atlasSortEl.querySelectorAll('button')) : [];
   window.__atlasSort = readLS('bird:atlasSort', 'count');
   atlasSortBtns.forEach(function (b) {
     b.setAttribute('aria-current', (b.dataset.sort === window.__atlasSort) ? 'true' : 'false');
@@ -186,10 +257,16 @@
 
   // Open-space click advances these segmented toggles to the next option.
   wireToggleAdvance(slider);
-  wireToggleAdvance(winPick);
-  wireToggleAdvance(atlasSortEl);
-  wireToggleAdvance(document.getElementById('modalPoseToggle'));
-  function syncAllPills() { syncPill(slider); syncPill(winPick); if (atlasSortEl) syncPill(atlasSortEl); }
+  if (CONFIG.timePeriodPickerVisible) wireToggleAdvance(winPick);
+  if (viewEnabled('atlas')) {
+    wireToggleAdvance(atlasSortEl);
+    wireToggleAdvance(document.getElementById('modalPoseToggle'));
+  }
+  function syncAllPills() {
+    syncPill(slider);
+    if (CONFIG.timePeriodPickerVisible) syncPill(winPick);
+    if (viewEnabled('atlas') && atlasSortEl) syncPill(atlasSortEl);
+  }
   // The buttons size from text content; wait for fonts so width is correct.
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(syncAllPills);
@@ -220,17 +297,17 @@
   // instead of rewriting one ~800KB line and conflicting on every merge.
   var DIMS = {}, MASKS = {}, tablesReady = false;
   (function loadTables() {
+    // DIMS/MASKS belong to the collage and Birdex. If both views are disabled,
+    // skip their round trips entirely.
+    if (!viewEnabled('collage') && !viewEnabled('birdex')) return;
     var q = '?v=' + SKETCH_VERSION;
     Promise.all([
       fetch('./dims.json' + q).then(function (r) { return r.json(); }),
       fetch('./masks.json' + q).then(function (r) { return r.json(); })
     ]).then(function (t) {
       DIMS = t[0]; MASKS = t[1]; tablesReady = true;
-      // renderCollage defers its first pack until the silhouettes exist (see
-      // the tablesReady gate); render now that they are here.
-      try { renderCollageFromData(); } catch (e) { }
-      // The Birdex draws its unregistered entries from the same masks.
-      try { renderBirdex(); } catch (e) { }
+      if (viewEnabled('collage')) try { renderCollageFromData(); } catch (e) { }
+      if (viewEnabled('birdex')) try { renderBirdex(); } catch (e) { }
     }).catch(function (e) {
       // Leave tablesReady false so renderCollage keeps waiting rather than
       // packing with no silhouettes. The empty-nest state still renders.
@@ -437,6 +514,7 @@
   }
 
   function renderCollage(items, animate) {
+    if (!viewEnabled('collage')) return;
     collage.innerHTML = '';
     // Drop the previous render's hit-test tiles up front so a click or hover on
     // the empty-nest state (or a collage that hasn't laid out yet) resolves to
@@ -792,6 +870,7 @@
     if (tip) tip.setAttribute('aria-hidden', 'true');
   });
   collage.addEventListener('click', function (ev) {
+    if (!viewEnabled('atlas')) return;
     var hit = maskHitTest(ev.clientX, ev.clientY);
     if (!hit) return;
     // Only set the hash - syncRouter does the go(2), so it can first record
@@ -827,6 +906,7 @@
   // changes, refreshRecent() refetches and re-renders. Empty state shows
   // a "no detections in this window" message.
   function renderCollageFromData(animate) {
+    if (!viewEnabled('collage')) return;
     var items = (DATA.recent && DATA.recent.species) || [];
     renderCollage(items, animate);
   }
@@ -834,8 +914,8 @@
   window.addEventListener('resize', function () {
     clearTimeout(rTimer);
     rTimer = setTimeout(function () {
-      renderCollageFromData();
-      drawHistograms();
+      if (viewEnabled('collage')) renderCollageFromData();
+      if (viewEnabled('stats')) drawHistograms();
     }, 120);
   });
 
@@ -871,7 +951,7 @@
   }
 
   function fetchJson(url) {
-    return fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+    return fetch(url, { cache: 'no-store', credentials: 'include' })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); });
   }
 
@@ -883,7 +963,7 @@
   //
   // API base. Same-origin by default; override with window.BNG_API_BASE
   // when the collage is served from a different host than birdnet-go.
-  var API = (window.BNG_API_BASE || '') + '/api/v2';
+  var API = (CONFIG.apiUrl || window.BNG_API_BASE || '') + '/api/v2';
 
   function apiUrl(path, params) {
     var url = API + path;
@@ -1067,6 +1147,7 @@
   // rotated label (common + scientific name) sits at the column's
   // bottom, and each column carries its own timestamp on the x-axis.
   function drawHistograms(animate) {
+    if (!viewEnabled('stats')) return;
     var tl = document.getElementById('statsTimeline');
     if (!tl) return;
     var all = ((DATA.recent && DATA.recent.species) || []).slice();
@@ -1237,6 +1318,7 @@
 
   // ---- Side text lists ----
   function renderStatsLists() {
+    if (!viewEnabled('stats')) return;
     var stats = DATA.stats || {};
     var recent = DATA.recent || { species: [] };
     var firstseen = DATA.firstseen || { species: [] };
@@ -1302,6 +1384,7 @@
   var ICON_PAUSE = '<svg viewBox="0 0 12 12" fill="currentColor"><rect x="3" y="2" width="2.5" height="8"/><rect x="6.5" y="2" width="2.5" height="8"/></svg>';
 
   function renderAtlas(animate) {
+    if (!viewEnabled('atlas')) return;
     var grid = document.getElementById('atlasGrid');
     if (!grid) return;
 
@@ -1771,6 +1854,7 @@
   }
 
   function renderBirdex(animate, lead) {
+    if (!viewEnabled('birdex')) return;
     var listEl = document.getElementById('birdexList');
     if (!listEl) return;
     if (!BIRDEX) {
@@ -1839,8 +1923,12 @@
       });
     }
 
-    if (birdexSel) renderBirdexEntry(birdexSel);
-    else if (!document.getElementById('birdexEntry').dataset.ready) renderBirdexEntry(null);
+    // SSE refreshes rebuild the list, but must not replace an open entry: its
+    // Audio object would keep playing while the new button/spectrogram reset.
+    var entryEl = document.getElementById('birdexEntry');
+    if (birdexSel) {
+      if (entryEl.dataset.slug !== birdexSel) renderBirdexEntry(birdexSel);
+    } else if (!entryEl.dataset.ready) renderBirdexEntry(null);
     if (animate) playBirdexEntrance(lead);
   }
 
@@ -1939,7 +2027,7 @@
   // half, or an entry the builder couldn't source prose for) and must read as
   // a deliberate blank rather than a stuck spinner.
   function fillBlurb(host, slug) {
-    if (!host) return;
+    if (!host || !viewEnabled('birdex')) return;
     var ready = BIRDEX_TEXT;
     if (!ready) host.innerHTML = '<p class="bx-blurb-pending">Loading description…</p>';
     loadBirdexText().then(function () {
@@ -1953,9 +2041,11 @@
   }
 
   function renderBirdexEntry(slug) {
+    if (!viewEnabled('birdex')) return;
     var el = document.getElementById('birdexEntry');
     if (!el) return;
     el.dataset.ready = '1';
+    el.dataset.slug = slug || '';
     if (!slug || !BIRDEX) {
       el.dataset.state = 'empty';
       el.innerHTML = '<p class="bx-hint">Pick an entry.</p>';
@@ -2232,20 +2322,23 @@
     // renderStatsLists runs BEFORE drawHistograms so the stats entrance
     // (fired at the end of drawHistograms) can stagger the side-panel rows
     // that were just built, in tandem with the graph populating.
-    renderCollageFromData(animate);
-    renderStatsLists();
-    drawHistograms(animate);
-    renderAtlas(animate);
-    // The Birdex list is life-list scoped, so a window change can't add or
-    // remove rows - only the open entry's "this window" stat moves.
-    if (birdexSel) renderBirdexEntry(birdexSel);
+    if (viewEnabled('collage')) renderCollageFromData(animate);
+    if (viewEnabled('stats')) { renderStatsLists(); drawHistograms(animate); }
+    if (viewEnabled('atlas')) renderAtlas(animate);
+    // A deliberate window change updates the entry's window-specific stat.
+    // Preserve scroll position while replacing the tall entry.
+    if (viewEnabled('birdex') && birdexSel) {
+      var pane = document.querySelector('.birdex-pane-entry');
+      var top = pane ? pane.scrollTop : 0;
+      renderBirdexEntry(birdexSel);
+      if (pane) pane.scrollTop = top;
+    }
   }
   function renderTimeIndependent(animate) {
     // Lists first, then the graph (see renderWindowDependent).
-    renderStatsLists();
-    drawHistograms(animate);
-    renderAtlas(animate);
-    renderBirdex(animate);
+    if (viewEnabled('stats')) { renderStatsLists(); drawHistograms(animate); }
+    if (viewEnabled('atlas')) renderAtlas(animate);
+    if (viewEnabled('birdex')) renderBirdex(animate);
   }
 
   function refreshRecent(animate) {
@@ -2299,20 +2392,22 @@
       if (forHours === currentHours && parts[4]) DATA.recent = parts[4];
       recomputeDerived();
       renderTimeIndependent(animate);
-      renderCollageFromData(animate);
+      if (viewEnabled('collage')) renderCollageFromData(animate);
     });
   }
 
-  // Start the Birdex metadata immediately. It's ~56KB and the atlas links off
-  // it (eBird codes), so waiting for a view switch would leave the first paint
-  // pointing every ebird chip at the generic explore page. Descriptions are
-  // NOT pulled here - they're the other ~390KB, fetched on first display.
-  loadBirdex().then(function () {
-    try { renderAtlas(); } catch (e) { }
-    try { renderBirdex(); } catch (e) { }
-  }).catch(function (e) {
-    if (window.console) console.warn('birdex.json failed to load', e);
-  });
+  // Birdex reference data is view-owned. When the view is disabled, neither
+  // birdex.json nor birdex-text.json is requested. Atlas links then use their
+  // generic eBird fallback, and detail cards keep their explicit no-description
+  // state rather than paying for disabled-view assets.
+  if (viewEnabled('birdex')) {
+    loadBirdex().then(function () {
+      try { renderAtlas(); } catch (e) { }
+      try { renderBirdex(); } catch (e) { }
+    }).catch(function (e) {
+      if (window.console) console.warn('birdex.json failed to load', e);
+    });
+  }
 
   // Kick off the initial fetch. Renders pull from DATA as soon as it
   // populates; until then the page sits with empty histograms + lists.
@@ -2324,6 +2419,11 @@
   winBtns.forEach(function (b) {
     b.addEventListener('click', function () { refreshRecent(true); });
   });
+
+  // Initialise the first enabled view's title and position. This matters when
+  // collage is disabled and a later view becomes the zero-index landing page.
+  setTitleForView(0);
+  views.style.transform = 'translateX(0)';
 
   // ---- Realtime updates (SSE) ----
   // BirdNET-Pi had no push channel, so the original polled every 30s.
@@ -2552,7 +2652,7 @@
     return illustrationSrc(sci, pose);
   }
   function openDetailModal(sci) {
-    if (!sci) return;
+    if (!sci || !viewEnabled('atlas')) return;
     var modal = document.getElementById('detail-modal');
     var img = document.getElementById('modalImg');
     var poseToggle = document.getElementById('modalPoseToggle');
@@ -2701,16 +2801,21 @@
     // #modalSci holds the open species (set below) - the same handle the
     // playback code reads. Guards against a second modal opening mid-fetch and
     // the first response landing in it.
-    loadBirdexText().then(function () {
-      if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
-      var raw = blurbFor(birdexSlugFor(sci));
-      var blurb = raw ? excerpt(raw, 620) : '';
-      descEl.textContent = blurb || 'No description available.';
-      descEl.classList.toggle('placeholder', !blurb);
-    }).catch(function () {
+    if (viewEnabled('birdex')) {
+      loadBirdexText().then(function () {
+        if ((document.getElementById('modalSci').textContent || '').trim() !== sci) return;
+        var raw = blurbFor(birdexSlugFor(sci));
+        var blurb = raw ? excerpt(raw, 620) : '';
+        descEl.textContent = blurb || 'No description available.';
+        descEl.classList.toggle('placeholder', !blurb);
+      }).catch(function () {
+        descEl.textContent = 'No description available.';
+        descEl.classList.add('placeholder');
+      });
+    } else {
       descEl.textContent = 'No description available.';
       descEl.classList.add('placeholder');
-    });
+    }
   }
   function closeDetailModal() {
     var modal = document.getElementById('detail-modal');
@@ -2868,30 +2973,37 @@
   // A detail card is always shown over the atlas, but you can open one from
   // any view (tapping a collage bird, a stats row, a timeline square). Closing
   // it should put you back where you started rather than stranding you on the
-  // atlas. Null means no card is open; it is captured on the transition into
-  // a card so re-entrant calls with a card already open don't overwrite it.
+  // atlas. Null means no card is open; otherwise this stores the originating
+  // view key so disabling/reordering views cannot send the user to the wrong one.
   var viewBeforeDetail = null;
   function syncRouter() {
     window.__lastHashchange = Date.now();
     var sci = readHash();
     var dex = readBirdexHash();
     if (location.hash === '#about') openAbout(); else closeAbout();
-    if (dex) {
+    if (dex && viewEnabled('birdex')) {
       // A Birdex deep link owns the view outright - it isn't an overlay, so it
       // never captures viewBeforeDetail and never opens the detail modal.
       highlightAtlas(null); closeDetailModal();
-      go(3);
+      goView('birdex');
       loadBirdex().then(function () { birdexSelect(dex); }).catch(function () { });
       return;
     }
-    if (sci) {
-      if (viewBeforeDetail === null) viewBeforeDetail = currentView;
-      go(2); highlightAtlas(sci); openDetailModal(sci);
+    if (dex && !viewEnabled('birdex')) {
+      history.replaceState(null, '', location.pathname + location.search);
+      dex = null;
+    }
+    if (sci && viewEnabled('atlas')) {
+      if (viewBeforeDetail === null) viewBeforeDetail = currentViewKey();
+      goView('atlas');
+      highlightAtlas(sci); openDetailModal(sci);
+    } else if (sci && !viewEnabled('atlas')) {
+      history.replaceState(null, '', location.pathname + location.search);
     } else {
       var back = viewBeforeDetail;
       viewBeforeDetail = null;
       highlightAtlas(null); closeDetailModal();
-      if (back !== null) go(back);
+      if (back !== null) goView(back);
     }
   }
   if (location.hash === '#about') openAbout();
@@ -3297,12 +3409,13 @@
   // that wants to point at a bird. Action chips inside cards stop
   // propagation themselves.
   function jumpToSci(sci) {
-    if (!sci) return;
+    if (!sci || !viewEnabled('atlas')) return;
     if (location.hash !== '#sci=' + encodeURIComponent(sci)) {
       location.hash = '#sci=' + encodeURIComponent(sci);
     } else {
       // Same hash -> still re-highlight (the user clicked it again).
-      go(2); highlightAtlas(sci);
+      goView(viewEnabled('atlas') ? 'atlas' : enabledViews[0].key);
+      highlightAtlas(sci);
     }
   }
   document.addEventListener('click', function (ev) {
@@ -3323,6 +3436,7 @@
   // an entry is linkable and the browser's back button walks the entries the
   // same way it walks detail cards.
   (function wireBirdex() {
+    if (!viewEnabled('birdex')) return;
     var v3 = document.getElementById('v3');
     if (!v3) return;
     var listEl = document.getElementById('birdexList');
@@ -3365,4 +3479,8 @@
     var s = readHash();
     if (s) highlightAtlas(s);
   };
+  }
+  var ready = window.__AVIAN_CONFIG_READY;
+  if (ready && typeof ready.then === 'function') ready.then(start, start);
+  else start();
 })();
