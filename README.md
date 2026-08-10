@@ -73,46 +73,36 @@ illustration fall back to BirdNET-Go's image proxy.
 
 ## The Birdex
 
-A fourth view: a numbered field guide over the illustration set. All 330
-species hold a permanent number. Ones this station has heard are *registered*
-and show their plate, typing, stats, rarity and a description; the rest stay
-silhouetted at `???`, drawn from `masks.json` so a full-roster list costs zero
-requests against the 419MB illustration directory — and never reveals art for a
-bird you haven't found. A locked entry can be unlocked by hand, which shows
-everything the database knows but deliberately no detection history, and never
-counts toward the registered tally. Entries deep-link as `#birdex/<slug>`.
+A numbered field guide over the illustration set. All 330 species hold a
+permanent number. Ones this station has heard are *registered* and show their
+plate, typing, stats, rarity and a description; the rest stay silhouetted at
+`???` until heard, or until unlocked by hand. Silhouettes are drawn from
+`masks.json`, so listing the full roster costs no requests against the 419MB
+illustration directory.
 
-Search matches name, scientific name, family, type and `#number`. Locked
-entries match too and show their names for the duration of the query, so a bird
-you know exists is findable — the plate still stays hidden.
+Search matches name, scientific name, family, type and `#number`. Entries
+deep-link as `#birdex/<slug>`.
 
 ### Typing
 
-Every species carries one **guild** (how it makes a living) and any number of
-**traits** (how it nests, forages, behaves), both derived from taxonomic family
-in `tools/types.json`. Family is a global signal, so a European or Australian
-bird added later types correctly without touching the table. Species-level
-overrides handle what family can't predict — kestrels nest in cavities though
-no other falcon here does; five of twenty-one ducks use tree holes rather than
-the ground.
+Each species has one **guild** (how it feeds) and any number of **traits** (how
+it nests, forages, behaves), mapped from taxonomic family in `tools/types.json`
+with per-species overrides. Family is a global signal, so birds outside this
+roster's range type correctly without touching the table.
 
-A few birds also carry a hand-awarded **element**, each with its own note
-explaining why that one earned it. They stay scarce on purpose — 15 of 330.
-Black-backed Woodpecker is fire-type because it moves into stands of freshly
-burned pine within a year of a burn.
+For added whimsy, a few birds also carry a hand-awarded **element** — fire,
+ice, ghost — each with its own note explaining why that one earned it. They're
+scarce on purpose so as not to overwhelm; the Black-backed Woodpecker is
+fire-type because it moves into stands of freshly burned pine within a year of
+a burn. Set `birdex.elementalWhimsy` to `false` to leave them out.
 
 `tools/audit-types.py` cross-checks every entry's badges against its own
-description and reports mismatches. It found the ducks, the kestrel, and that
-`colonial` was wrong for most of Icteridae. Expect roughly two thirds false
-positives — "the Carolina Colony", "may imitate the call", "nocturnal migrants",
-and birds that are brood-parasite *victims* all match naive patterns — so it
-reports and never edits.
+description and reports mismatches.
 
 ### Data
 
-Reference data is built offline and committed, so the deployed page makes **no
-third-party calls at all** — the detail modal reads its description from here
-too, rather than calling Wikipedia from every visitor's browser.
+Built offline and committed, so the page makes **no third-party calls at all**;
+the detail modal reads its description from here too.
 
 | field | source |
 | --- | --- |
@@ -122,24 +112,19 @@ too, rather than calling Wikipedia from every visitor's browser.
 | eBird code | Wikidata `P3444` (99.4%) |
 | common name + description | Wikipedia extracts (100%, median ~186 words) |
 
-Two files, split by load cost and sharing a content stamp: `birdex.json` (~78KB
-— metadata, typing and the type vocabulary) loads eagerly because the list and
-every outbound link need it, and `birdex-text.json` (~395KB — descriptions
-only) is fetched the first time something displays prose. If the stamps ever
-disagree — a stale cached half — the text side is discarded rather than
-rendered against the wrong roster, and entries fall back to an explicit "no
-description available".
+**Avibase is never fetched** — it sits behind a Cloudflare challenge that 403s
+everything including `/robots.txt`, so identifiers come from Wikidata and we
+only link out.
 
-The roster is 330, not 333: the illustration set files three species under both
-their old and new genus (`regulus-calendula` *and* `corthylio-calendula` are one
-Ruby-crowned Kinglet). Those are merged via `aliases.merge`, so BirdNET-Go
-reporting either name registers the same entry rather than stranding a twin that
-can never be found. The build **fails** if two entries share an Avibase ID or
-eBird code without a merge declared — which is how all three were caught.
+Two files share a content stamp: `birdex.json` (~78KB, metadata and typing)
+loads eagerly; `birdex-text.json` (~395KB, descriptions) loads on first
+display. A stamp mismatch discards the text side rather than rendering it
+against the wrong roster.
 
-Avibase is never fetched. It sits behind a Cloudflare managed challenge that
-403s everything including `/robots.txt`, so the identifiers come from Wikidata
-and we only link out.
+The roster is 330, not 333 — three species are filed under both their old and
+new genus and are merged, so either name registers the same entry. The build
+fails on duplicate Avibase IDs or eBird codes without a declared merge, on
+renumbering, and on coverage regressions.
 
 ```sh
 python3 tools/build-birdex.py                # fetch only what's new
@@ -148,11 +133,8 @@ python3 tools/build-birdex.py --refresh SLUG # refetch one species
 python3 tools/audit-types.py                 # badges vs. descriptions
 ```
 
-To add a bird, append a scientific name to `tools/roster-extra.txt` and rebuild;
-only the new names are fetched and existing dex numbers never change. A full
-rebuild is 1 Wikidata query, 17 batched Wikipedia calls, and a targeted top-up
-pass for species whose lead section is too thin to read as an entry (that pass
-can't be batched — the API forces `exlimit=1` for article bodies).
+To add a bird, append a scientific name to `tools/roster-extra.txt` and
+rebuild. Only new names are fetched; dex numbers never change.
 
 ## Customizing a deployment
 
@@ -171,7 +153,10 @@ window.AVIAN_CONFIG = {
   defaultTimePeriod: "24H",       // 1H, 12H, 24H, 7D, or ALL
   timePeriodPickerVisible: true,
   siteName: "your birds",
-  apiUrl: ""                      // same-origin; omit /api/v2
+  apiUrl: "",                     // same-origin; omit /api/v2
+  birdex: {
+    elementalWhimsy: true         // hand-awarded fire/ice/ghost badges
+  }
 };
 ```
 
@@ -223,3 +208,38 @@ CC-BY-NC-SA-4.0
 
 Illustrations and original front-end are teddy's; see
 [AvianVisitors](https://github.com/Twarner491/AvianVisitors) 
+
+## Appendix: data sources
+
+Everything in `public/birdex.json` and `public/birdex-text.json` is fetched at
+build time by `tools/build-birdex.py` and committed. Nothing here is queried at
+runtime — the served page talks only to your own BirdNET-Go.
+
+| source | used for | licence |
+| --- | --- | --- |
+| [Wikidata](https://www.wikidata.org) | Avibase IDs (`P2026`), IUCN category (`P141`), family (`P171*` → `P225`), eBird codes (`P3444`) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Wikipedia](https://en.wikipedia.org) (English) | common names and the species descriptions in `birdex-text.json`, via the MediaWiki extracts API | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| [Avibase](https://avibase.bsc-eoc.org) | linked to only, never fetched — see below | n/a |
+| [IUCN Red List](https://www.iucnredlist.org) | conservation categories, obtained via Wikidata rather than directly | n/a |
+| [eBird / Clements](https://ebird.org) | species codes, obtained via Wikidata rather than directly | n/a |
+| Guild, trait and element assignments | hand-written in `tools/types.json` | this repo's licence |
+
+**Avibase is deliberately never fetched.** It sits behind a Cloudflare managed
+challenge that returns 403 to any automated request, including `/robots.txt`.
+Its species identifiers are published on Wikidata as `P2026`, so entries deep-link
+to `avibase.bsc-eoc.org/species.jsp?avibaseid=…` without the build ever
+contacting the host.
+
+Wikimedia asks for a descriptive User-Agent and unhurried, serial requests; the
+build sets one and batches 20 titles per call. A full rebuild is one Wikidata
+query plus roughly 240 Wikipedia calls, run by hand and rarely.
+
+### A note on the description text
+
+`birdex-text.json` is derived from Wikipedia and therefore carries **CC BY-SA
+4.0**, which requires attribution and share-alike. That is not the same licence
+as this repository's CC-BY-NC-SA-4.0, and the two are not interchangeable —
+share-alike forbids adding restrictions, and `NC` is one. Treat that file as
+CC BY-SA 4.0 attributed to its Wikipedia contributors rather than as relicensed
+under the repo terms. The metadata in `birdex.json` is unaffected: Wikidata is
+CC0, and factual identifiers aren't copyrightable in the first place.

@@ -21,5 +21,13 @@ window.AVIAN_CONFIG = {
 
   // Empty means same-origin. For a separate BirdNET-Go host, use e.g.
   // "https://birdnet.example.com" (without /api/v2).
-  apiUrl: ""
+  apiUrl: "",
+
+  birdex: {
+    // Every bird carries an ecological guild and traits. A handful also carry
+    // a hand-awarded elemental badge - fire, ice, ghost - which is subjective
+    // and for fun. Set false for a straight field guide; the guild and trait
+    // badges are unaffected.
+    elementalWhimsy: true
+  }
 };

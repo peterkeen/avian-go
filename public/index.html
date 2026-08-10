@@ -10,7 +10,7 @@
 <!-- Apply the saved theme before first paint so dark mode doesn't flash
      light on load. The full switcher lives in Settings (writes bird:theme). -->
 <script>try{if(localStorage.getItem('bird:theme')==='dark')document.documentElement.setAttribute('data-theme','dark');}catch(e){}</script>
-<link rel="stylesheet" href="./styles.css?v=r18">
+<link rel="stylesheet" href="./styles.css?v=r26">
 </head>
 <body class="av-local">
 <header class="top">
@@ -114,7 +114,7 @@
             <div class="birdex-meter"><i id="birdexMeter"></i></div>
             <p class="birdex-note" id="birdexNote"></p>
             <input type="search" id="birdexSearch" class="birdex-search"
-                   placeholder="name, family, type, or #number" aria-label="search the birdex"
+                   placeholder="name, family, badge, or #number" aria-label="search the birdex"
                    autocomplete="off" spellcheck="false">
           </div>
           <div class="birdex-list" id="birdexList"></div>
@@ -214,7 +214,7 @@
 
 
 
-<script src="./config-loader.js?v=r19"></script>
-<script src="./apt.js?v=r19"></script>
+<script src="./config-loader.js?v=r26"></script>
+<script src="./apt.js?v=r26"></script>
 </body>
 </html>
