@@ -24,7 +24,7 @@
     "granivore":   { "label": "Granivore",   "flavor": "Seeds and grain, cracked in a heavy conical bill." },
     "nectarivore": { "label": "Nectarivore", "flavor": "Runs on sugar, and burns it faster than any other bird." },
     "frugivore":   { "label": "Frugivore",   "flavor": "Follows the fruit, wandering wherever the berries are." },
-    "omnivore":    { "label": "Omnivore",    "flavor": "Eats whatever is going. Usually the one thriving near people." }
+    "omnivore":    { "label": "Omnivore",    "flavor": "No fixed menu - insects, fruit, seeds, eggs, carrion - and switches with the season." }
   },
 
   "trait": {

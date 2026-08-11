@@ -9,7 +9,8 @@
     defaultTimePeriod: '24H',
     timePeriodPickerVisible: true,
     siteName: 'your birds',
-    apiUrl: ''
+    apiUrl: '',
+    birdex: { elementalWhimsy: true }
   };
   var PERIOD_HOURS = { '1H': 1, '12H': 12, '24H': 24, '7D': 168, 'ALL': 1000000 };
   var CONFIG = {
@@ -20,6 +21,15 @@
       ? RAW_CONFIG.siteName.trim() : DEFAULT_CONFIG.siteName,
     apiUrl: typeof RAW_CONFIG.apiUrl === 'string' ? RAW_CONFIG.apiUrl.trim().replace(/\/$/, '') : ''
   };
+  // elementalWhimsy covers the hand-awarded fire/ice/ghost badges - the
+  // subjective half of the typing - so a deployment that wants a straight
+  // field guide can drop them and keep the ecological guild/trait ones. It's
+  // applied by stripping the tags as birdex.json loads rather than by
+  // filtering at each render, so the badges, the table and the search index
+  // all agree without having to remember the setting.
+  var rawBirdex = RAW_CONFIG.birdex || {};
+  CONFIG.birdex = { elementalWhimsy: rawBirdex.elementalWhimsy !== false };
+
   var configuredViews = RAW_CONFIG.enabledViews || RAW_CONFIG.views;
   VIEW_KEYS.forEach(function (key) {
     CONFIG.views[key] = !configuredViews || configuredViews[key] !== false;
@@ -1669,11 +1679,25 @@
   var BIRDEX_TEXT = null, birdexTextPromise = null;
   var birdexSel = null, birdexQuery = '';
 
+  // Drop the elemental tags at the load boundary when they're switched off, so
+  // nothing downstream has to know about the setting. Badges, the hover-free
+  // table and the search index all read the same stripped data and can't
+  // disagree about whether a bird is fire-type.
+  function stripWhimsy(data) {
+    if (CONFIG.birdex.elementalWhimsy || !data) return data;
+    Object.keys(data.species || {}).forEach(function (slug) {
+      var ty = data.species[slug].types;
+      if (ty) { delete ty.element; delete ty.note; }
+    });
+    if (data.vocab) delete data.vocab.element;
+    return data;
+  }
+
   function loadBirdex() {
     if (!birdexPromise) {
       birdexPromise = fetch('./birdex.json?v=' + SKETCH_VERSION)
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function (j) { BIRDEX = j; return j; })
+        .then(function (j) { BIRDEX = stripWhimsy(j); return BIRDEX; })
         .catch(function (e) { birdexPromise = null; throw e; });
     }
     return birdexPromise;
@@ -1737,11 +1761,66 @@
     return (BIRDEX && BIRDEX.aliases && BIRDEX.aliases[s]) || s;
   }
 
+  // IUCN Red List categories are about global extinction risk, not abundance.
+  // "Least concern" is the term of art but reads as a claim about how often
+  // you'd see one - especially sitting next to the local rarity badge - so the
+  // safe end of the scale is labelled plainly and the tip below says what the
+  // scale actually measures. The threatened categories keep their real names;
+  // those are worth stating exactly.
   var IUCN_LABELS = {
-    LC: 'least concern', NT: 'near threatened', VU: 'vulnerable',
+    LC: 'common', NT: 'near threatened', VU: 'vulnerable',
     EN: 'endangered', CR: 'critically endangered', EW: 'extinct in the wild',
     EX: 'extinct', DD: 'data deficient', NE: 'not evaluated',
   };
+  var IUCN_FULL = {
+    LC: 'Least Concern', NT: 'Near Threatened', VU: 'Vulnerable',
+    EN: 'Endangered', CR: 'Critically Endangered', EW: 'Extinct in the Wild',
+    EX: 'Extinct', DD: 'Data Deficient', NE: 'Not Evaluated',
+  };
+  // Every badge on an entry - status and typing alike - is described as a
+  // {kind, cls, attr, label, desc} record, and both the chip row at the top and
+  // the table under the plate render from those records. One list means a badge
+  // can't appear in one place and not the other, and can't ship without a
+  // description: the table would show an empty cell.
+  function chipHtml(d) {
+    var base = d.kind === 'type' ? 'bx-type' : 'bx-badge';
+    return '<span class="' + base + (d.cls ? ' ' + d.cls : '') + '"' + (d.attr || '') + '>'
+      + esc(d.label) + (d.desc ? '<span class="bx-tip">' + esc(d.desc) + '</span>' : '') + '</span>';
+  }
+  function chipRow(list) { return list.map(chipHtml).join(''); }
+
+  function iucnDesc(code) {
+    if (!code) return null;
+    return {
+      kind: 'badge', cls: '', attr: ' data-iucn="' + esc(code) + '"',
+      label: IUCN_LABELS[code] || code,
+      desc: 'IUCN Red List: ' + (IUCN_FULL[code] || code)
+        + '. Global risk of extinction, not how often it turns up here.'
+    };
+  }
+
+  // The bands rarityLabel() sorts into, stated in the units they're measured
+  // in, plus this bird's actual rate - the tier alone doesn't say whether it
+  // sits at the top or the bottom of its band.
+  var RARITY_BANDS = {
+    common: 'five or more a day',
+    regular: 'between one and five a day',
+    occasional: 'between one every five days and one a day',
+    rare: 'fewer than one every five days',
+  };
+  function rarityDesc(label, perDay) {
+    var rate = perDay >= 10 ? Math.round(perDay)
+      : perDay >= 0.1 ? perDay.toFixed(1) : perDay.toFixed(2);
+    return {
+      kind: 'badge', cls: 'local', attr: ' data-rarity="' + esc(label) + '"',
+      label: label + ' here',
+      desc: 'Averages ' + rate + ' detections a day at this station since it was '
+        + 'first heard' + (RARITY_BANDS[label] ? ' - ' + RARITY_BANDS[label] : '') + '.'
+    };
+  }
+  function mutedDesc(label, desc) {
+    return { kind: 'badge', cls: 'muted', attr: '', label: label, desc: desc };
+  }
   function avibaseUrl(id) {
     return 'https://avibase.bsc-eoc.org/species.jsp?avibaseid=' + encodeURIComponent(id);
   }
@@ -1822,34 +1901,46 @@
   // for a bird you know exists shouldn't fail just because it hasn't turned up
   // yet. The list shows their names for the duration of the query (see
   // renderBirdex); the plate stays behind the silhouette until it's unlocked.
+  // Everything on an entry that carries a label: name, taxonomy, typing,
+  // conservation status and local rarity. Whether an entry is locked or
+  // unlocked is a state of the dex rather than a property of the bird, so it
+  // isn't searchable.
+  function rowSearchText(row) {
+    var rec = row.rec;
+    var words = [rec.com || '', rec.sci || '', rec.family || '', typeWords(rec.types)];
+
+    // Conservation status by code, by the label on the badge, and by the real
+    // IUCN wording - "least concern" should find what the badge calls "common".
+    if (rec.iucn) {
+      words.push(rec.iucn, IUCN_LABELS[rec.iucn] || '', IUCN_FULL[rec.iucn] || '');
+    }
+
+    // Local rarity only exists for a bird that's actually been heard; it's
+    // derived from this station's own detections, not from the database.
+    if (row.life) words.push(rarityLabel(+row.life.n || 0, row.life.first_seen));
+    return words.join(' ').toLowerCase();
+  }
+
   function birdexMatches(row, q) {
     if (!q) return true;
-    var rec = row.rec;
-    return (rec.com || '').toLowerCase().indexOf(q) >= 0
-      || (rec.sci || '').toLowerCase().indexOf(q) >= 0
-      || (rec.family || '').toLowerCase().indexOf(q) >= 0
-      || typeWords(rec.types).indexOf(q) >= 0
-      || String(rec.n || '').indexOf(q.replace(/^#/, '')) === 0;
+    return rowSearchText(row).indexOf(q) >= 0
+      || String(row.rec.n || '').indexOf(q.replace(/^#/, '')) === 0;
   }
 
   // Searchable text for a bird's typing: both the vocabulary key and the label
   // shown on the badge, since people will type what they can see ("terrestrial")
   // as readily as the underlying term ("ground-dweller").
-  // Deliberately NOT consulted for still-locked entries - "raptor" narrowing the
-  // list to a set of silhouettes would give away what they are.
   function typeWords(ty) {
     if (!ty) return '';
-    var V = (BIRDEX && BIRDEX.vocab) || {};
+    // Labels come from typeList so search and badges stay in step; the raw
+    // keys are added too, since people type "ground-dweller" as readily as
+    // "Terrestrial". Elements are already gone from the data by this point if
+    // they're switched off (see stripWhimsy).
     var words = [];
-    var push = function (axis, key) {
-      if (!key) return;
-      words.push(key);
-      var d = (V[axis] || {})[key];
-      if (d && d.label) words.push(d.label);
-    };
-    push('guild', ty.guild);
-    (ty.traits || []).forEach(function (t) { push('trait', t); });
-    push('element', ty.element);
+    typeList(ty).forEach(function (d) { words.push(d.label); });
+    if (ty.guild) words.push(ty.guild);
+    (ty.traits || []).forEach(function (t) { words.push(t); });
+    if (ty.element) words.push(ty.element);
     return words.join(' ').toLowerCase();
   }
 
@@ -1898,7 +1989,12 @@
       // While a query is active a locked row shows its name, so a search can
       // actually find it - but only its name. The plate stays hidden behind
       // the silhouette, and the name reverts to ??? when the query clears.
-      var name = (shown || q) ? esc(rec.com || rec.sci) : '???';
+      // Whether a real name is on screen, as opposed to the ??? placeholder.
+      // Styling keys off this rather than off data-caught, because a row can
+      // legitimately show its name while still being uncaught - revealed by
+      // hand, or surfaced by an active search.
+      var named = shown || !!q;
+      var name = named ? esc(rec.com || rec.sci) : '???';
       var thumb = shown
         ? '<img loading="lazy" decoding="async" alt="" src="' +
             esc(rec.art !== false ? illustrationSrc(rec.sci, 1) : proxyImageSrc(rec.sci)) + '"' +
@@ -1906,6 +2002,7 @@
         : '<canvas class="bx-sil" data-slug="' + esc(row.slug) + '"></canvas>';
       return '<button type="button" class="birdex-row" data-slug="' + esc(row.slug) + '"'
         + ' data-caught="' + caught + '"'
+        + (named ? ' data-named="true"' : '')
         + (revealed ? ' data-revealed="true"' : '')
         + (row.slug === birdexSel ? ' data-active="true"' : '')
         + '><span class="bx-n">' + num + '</span>'
@@ -1983,33 +2080,42 @@
   // page at all - which is affordable precisely because it's rare.
   // The hover line comes from the shipped vocabulary; an element prefers its
   // per-species note, which says why *this* bird earned it.
-  function typeBadges(ty) {
-    if (!ty) return '';
+  // One description of a bird's typing, rendered two ways. Keeping the list
+  // here means the chips and the table can never drift apart, and the elements
+  // opt-out only has to be honoured once.
+  function typeList(ty) {
+    if (!ty) return [];
     var V = (BIRDEX && BIRDEX.vocab) || {};
     var out = [];
-    // Flavor rides in a .bx-tip child rather than a title attribute: native
-    // tooltips wait a second or two and render in system chrome, so the help
-    // cursor fired instantly and nothing followed it. This matches the .tip
-    // popups the pose toggle and atlas sort already use.
-    var tip = function (text) {
-      return text ? '<span class="bx-tip">' + esc(text) + '</span>' : '';
-    };
     var g = (V.guild || {})[ty.guild];
-    if (g) {
-      out.push('<span class="bx-type guild" data-guild="' + esc(ty.guild) + '">'
-        + esc(g.label) + tip(g.flavor) + '</span>');
-    }
+    if (g) out.push({ kind: 'type', cls: 'guild', attr: ' data-guild="' + esc(ty.guild) + '"', label: g.label, desc: g.flavor });
     (ty.traits || []).forEach(function (t) {
       var d = (V.trait || {})[t];
-      if (d) out.push('<span class="bx-type trait">' + esc(d.label) + tip(d.flavor) + '</span>');
+      if (d) out.push({ kind: 'type', cls: 'trait', attr: '', label: d.label, desc: d.flavor });
     });
     if (ty.element) {
       var e = (V.element || {})[ty.element] || {};
-      out.push('<span class="bx-type element" data-element="' + esc(ty.element) + '">'
-        + esc(e.label || ty.element) + tip(ty.note || e.flavor) + '</span>');
+      out.push({
+        kind: 'type', cls: 'element', attr: ' data-element="' + esc(ty.element) + '"',
+        // An element prefers its per-species note, which says why this
+        // particular bird earned it rather than what the element means.
+        label: e.label || ty.element, desc: ty.note || e.flavor
+      });
     }
-    // Bare spans - the caller decides which badge row they belong to.
-    return out.join('');
+    return out;
+  }
+
+  // The chip rows at the top are the summary; this is every one of them spelled
+  // out, status badges included. Nothing here depends on a pointer, which is
+  // the point - an e-ink panel or a touch screen can't surface a tooltip at
+  // all, so this is where the descriptions actually live.
+  function badgeTable(list) {
+    var items = list.filter(Boolean);
+    if (!items.length) return '';
+    return '<dl class="bx-badge-table">' + items.map(function (d) {
+      return '<dt>' + chipHtml({ kind: d.kind, cls: d.cls, attr: d.attr, label: d.label })
+        + '</dt><dd>' + esc(d.desc || '') + '</dd>';
+    }).join('') + '</dl>';
   }
 
   function statBar(label, value, frac, hint) {
@@ -2066,7 +2172,10 @@
       el.dataset.state = 'unseen';
       el.innerHTML = ''
         + '<header class="bx-entry-head"><span class="bx-entry-n">' + num + '</span>'
-        + '<span class="bx-badge muted">not registered</span></header>'
+        // No table on a locked entry: there'd be one row, and the prose below
+        // already says the same thing at more length.
+        + chipHtml(mutedDesc('not registered',
+            'This station hasn\'t heard this species yet.')) + '</header>'
         + '<h2 class="bx-entry-name">???</h2>'
         + '<p class="bx-entry-sci">&mdash;</p>'
         + '<div class="bx-screen unseen"><canvas class="bx-sil-big" data-slug="' + esc(slug) + '"></canvas></div>'
@@ -2093,14 +2202,17 @@
     if (!caught) {
       var art = rec.art !== false;
       el.dataset.state = 'revealed';
+      var statusList = [
+        iucnDesc(rec.iucn),
+        mutedDesc('unlocked', 'Opened by hand rather than heard here, so it has no '
+          + 'recordings or detection history and doesn\'t count toward the registered total.')
+      ].filter(Boolean);
       el.innerHTML = ''
         + '<header class="bx-entry-head"><span class="bx-entry-n">' + num + '</span>'
         + '<span class="bx-badges">'
         + '<span class="bx-badge-row">'
-        + (rec.iucn ? '<span class="bx-badge" data-iucn="' + esc(rec.iucn) + '">'
-            + esc(IUCN_LABELS[rec.iucn] || rec.iucn) + '</span>' : '')
-        + '<span class="bx-badge muted">unlocked</span></span>'
-        + '<span class="bx-badge-row">' + typeBadges(rec.types) + '</span>'
+        + chipRow(statusList) + '</span>'
+        + '<span class="bx-badge-row">' + chipRow(typeList(rec.types)) + '</span>'
         + '</span></header>'
         + '<h2 class="bx-entry-name">' + esc(rec.com || rec.sci) + '</h2>'
         + '<p class="bx-entry-sci">' + esc(rec.sci)
@@ -2108,6 +2220,7 @@
         + '<div class="bx-screen"><img alt="' + esc(rec.com || rec.sci) + '" src="'
         + esc(art ? illustrationSrc(rec.sci, 1) : proxyImageSrc(rec.sci)) + '"'
         + (art ? ' onerror="this.onerror=null;this.src=\'' + esc(proxyImageSrc(rec.sci)) + '\'"' : '') + '></div>'
+        + badgeTable(statusList.concat(typeList(rec.types)))
         + '<p class="bx-hint bx-not-heard">Not heard here yet &mdash; no recordings or detection '
         + 'history. Unlocked by hand.</p>'
         + '<div class="bx-blurb" id="bxBlurb"></div>'
@@ -2148,9 +2261,9 @@
     });
     var win = winBySci[life.sci] || 0;
 
-    var iucn = rec.iucn ? IUCN_LABELS[rec.iucn] || rec.iucn : null;
     var local = rarityLabel(total, life.first_seen);
     var art = rec.art !== false;
+    var statusList = [iucnDesc(rec.iucn), rarityDesc(local, perDay)].filter(Boolean);
 
     el.innerHTML = ''
       + '<header class="bx-entry-head">'
@@ -2160,12 +2273,10 @@
       // badge strips separated by the name.
       + '<span class="bx-badges">'
       + '<span class="bx-badge-row">'
-      // The global tier is near-constant (most birds are least concern), so it
+      // The global tier is near-constant (291 of 330 are least concern), so it
       // never stands alone - the local tier is what actually varies here.
-      + (iucn ? '<span class="bx-badge" data-iucn="' + esc(rec.iucn) + '">' + esc(iucn) + '</span>' : '')
-      + '<span class="bx-badge local" data-rarity="' + esc(local) + '">' + esc(local) + ' here</span>'
-      + '</span>'
-      + '<span class="bx-badge-row">' + typeBadges(rec.types) + '</span>'
+      + chipRow(statusList) + '</span>'
+      + '<span class="bx-badge-row">' + chipRow(typeList(rec.types)) + '</span>'
       + '</span></header>'
       + '<h2 class="bx-entry-name">' + esc(rec.com || life.com || rec.sci) + '</h2>'
       + '<p class="bx-entry-sci">' + esc(rec.sci)
@@ -2183,6 +2294,7 @@
         + ICON_FLIGHT + '<span class="tip">in flight</span></button>'
         + '</div>' : '')
       + '</div>'
+      + badgeTable(statusList.concat(typeList(rec.types)))
       + '<div class="bx-stats">'
       // Each bar is scaled against the same measure taken across the whole life
       // list, so bar lengths are comparable down the card and between species.

@@ -1180,13 +1180,27 @@
     color: var(--ink-soft); letter-spacing: 0.04em;
   }
   .birdex-note:empty { display: none; }
+  /* Two things were wrong here. appearance:none stops a bare input[type=search]
+     keeping its UA styling - on WebKit that's the platform's own font metrics,
+     a corner radius fighting the one below, and an inset cancel button.
+
+     The font is the other half: this box sits directly above a list of species
+     names set in the body serif and exists to type those names into, so it
+     belongs to the list, not to the mono chrome that labels counts and dex
+     numbers. Matching .bx-name's size and tracking makes what you type look
+     like what you're searching. */
   .birdex-search {
-    width: 100%; margin-top: 10px; padding: 8px 11px;
+    -webkit-appearance: none; appearance: none;
+    width: 100%; margin-top: 10px; padding: 9px 11px;
     background: var(--paper-2); border: 0; border-radius: 7px;
     box-shadow: var(--recess); color: var(--ink);
-    font: 11px ui-monospace, Menlo, monospace; letter-spacing: 0.04em;
+    font-family: ui-serif, "Iowan Old Style", "Apple Garamond", Georgia, serif;
+    font-size: 12.5px; line-height: 1.4; letter-spacing: 0.01em;
   }
-  .birdex-search::placeholder { color: var(--ink-soft); }
+  .birdex-search::placeholder {
+    color: var(--ink-soft); font-style: italic; letter-spacing: 0.01em;
+  }
+  .birdex-search::-webkit-search-cancel-button { -webkit-appearance: none; }
   .birdex-search:focus { outline: none; box-shadow: var(--recess), 0 0 0 2px var(--hairline); }
 
   /* ---- The list ----
@@ -1204,7 +1218,14 @@
     font: 11px ui-monospace, Menlo, monospace; color: var(--ink-soft);
     padding: 18px 2px;
   }
+  /* font-family: inherit is load-bearing. A <button> does not inherit type
+     from its ancestors - it falls back to the UA's system sans - so without
+     this every species name in the list renders in the wrong family while the
+     number and count columns look fine, because those set ui-monospace
+     explicitly. Same trap as the search input below, which is why that one
+     spells its family out too. */
   .birdex-row {
+    font-family: inherit;
     display: grid; grid-template-columns: 34px 40px minmax(0, 1fr) auto;
     align-items: center; gap: 9px;
     width: 100%; padding: 5px 8px; margin-bottom: 2px;
@@ -1229,7 +1250,11 @@
   .birdex-row .bx-ct {
     font: 9px ui-monospace, Menlo, monospace; color: var(--ink-soft);
   }
-  .birdex-row[data-caught="false"] .bx-name { color: var(--ink-soft); letter-spacing: 0.12em; }
+  /* The wide tracking is for the ??? glyphs specifically - it spaces three
+     question marks into a placeholder. Keyed on data-named rather than
+     data-caught so it never lands on a real name, which a revealed entry or a
+     search hit on a locked row would otherwise get. */
+  .birdex-row:not([data-named]) .bx-name { color: var(--ink-soft); letter-spacing: 0.12em; }
 
   /* Silhouettes are painted from masks.json into a canvas at the mask's own
      resolution (~93x66) and scaled up. Blocky is intentional: it reads as a
@@ -1505,13 +1530,18 @@
   }
   /* An unlocked entry shows the plate but never pretends to have a history. */
   .bx-not-heard { margin: 14px 0 0; }
-  .birdex-row[data-revealed="true"] .bx-name { color: var(--ink-2); font-style: italic; }
+  /* Unlocked by hand, not heard here - italic marks it as distinct from a
+     registered bird without a second badge in the row. Tracking stays normal;
+     it's a name, not a placeholder. */
+  .birdex-row[data-revealed="true"] .bx-name {
+    color: var(--ink-2); font-style: italic; letter-spacing: 0.01em;
+  }
 
   /* Badge tooltip. Opens DOWNWARD: the badge cluster sits at the very top of
      .birdex-pane-entry, which scrolls, so a tip above the first row would be
      clipped by the pane edge. Right-anchored so it grows inward from the
      right-aligned cluster instead of off the side of the card. */
-  .bx-type { position: relative; }
+  .bx-type, .bx-badge { position: relative; }
   .bx-tip {
     position: absolute; top: calc(100% + 7px); right: 0;
     width: max-content; max-width: 260px;
@@ -1523,5 +1553,33 @@
     text-align: left; opacity: 0; pointer-events: none;
     transition: opacity 140ms ease; z-index: 6;
   }
-  .bx-type:hover .bx-tip { opacity: 1; }
+  .bx-type:hover .bx-tip, .bx-badge:hover .bx-tip { opacity: 1; }
+  /* Every badge carries a tip now - status ones included - so the help cursor
+     is unconditional. The table below the plate covers the type badges for
+     pointerless displays; status badges are short enough to stand alone. */
+  .bx-badge { cursor: help; }
   @media (hover: none) { .bx-tip { display: none; } }
+
+  /* ---- Badge table ----
+     The badge row up in the header is the summary; this is the same set with
+     the meanings spelled out. Always rendered - it's where the descriptions
+     actually live, since nothing in here depends on :hover and a pointerless
+     display (e-ink, touch) can't surface a tooltip at all. */
+  .bx-badge-table {
+    display: grid; grid-template-columns: auto minmax(0, 1fr);
+    gap: 7px 12px; align-items: baseline;
+    margin: 16px 0 0; padding-top: 14px;
+    box-shadow: inset 0 1px 0 var(--hairline);
+  }
+  .bx-badge-table dt { margin: 0; }
+  .bx-badge-table dd {
+    margin: 0; color: var(--ink-2);
+    font: 10.5px/1.5 ui-monospace, Menlo, monospace; letter-spacing: 0.01em;
+  }
+  /* The chips carry a help cursor and a tooltip child for the hover build;
+     in table mode there's nothing hidden, so neither applies. */
+  /* Chips in the table are labels, not affordances - the meaning is already in
+     the next column, so no help cursor and nothing hidden behind hover. */
+  .bx-badge-table .bx-type,
+  .bx-badge-table .bx-badge { cursor: default; }
+  .bx-badge-table .bx-tip { display: none; }
